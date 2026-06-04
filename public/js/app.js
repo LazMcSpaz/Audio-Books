@@ -6,6 +6,7 @@
  */
 
 import { ingest, fileExtension } from "./ingest.js";
+import { pdfLooksScanned, ocrPdf } from "./ocr.js";
 import {
   processBook,
   estimateMonths,
@@ -19,10 +20,6 @@ const ACCEPTED = new Set([".txt", ".epub", ".pdf"]);
 let current = null;
 
 const $ = (sel) => document.querySelector(sel);
-
-function bytesToFile(name, text) {
-  return new File([text], name, { type: "text/plain" });
-}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -158,7 +155,101 @@ function onDownloadFlags() {
   );
 }
 
+// --- OCR fallback (scanned / image-only PDFs) -----------------------------
+
+// Render the opt-in OCR offer when a PDF has no usable text layer.
+function offerOcr(file, { empty } = {}) {
+  current = null;
+  const panel = $("#ocr");
+  const lead = empty
+    ? `<strong>No text could be extracted from this PDF.</strong> It looks like a
+       scan (page images with no text layer).`
+    : `<strong>This PDF looks like a scan</strong> — page images with little or no
+       embedded text.`;
+  panel.innerHTML = `
+    <h2>📄 Scanned PDF detected</h2>
+    <p>${lead}</p>
+    <p class="muted">
+      You can run <strong>OCR in your browser</strong> to read the text off the
+      page images. It runs locally — nothing is uploaded and no API is called —
+      but it's slow and downloads ~15&nbsp;MB of engine/language data on first
+      use. OCR of old scans is imperfect; expect to fix typos in the Stage 2
+      review pass.
+    </p>
+    <div class="actions">
+      <button id="runOcr" class="btn btn--primary">Run OCR in browser</button>
+    </div>
+    <div id="ocrProgress" class="ocr-progress" hidden>
+      <div class="ocr-bar"><div id="ocrBar" class="ocr-bar__fill"></div></div>
+      <p id="ocrMsg" class="muted"></p>
+    </div>
+  `;
+  show(panel);
+  $("#runOcr").addEventListener("click", () => runOcr(file));
+}
+
+async function runOcr(file) {
+  const btn = $("#runOcr");
+  if (btn) btn.disabled = true;
+  const progress = $("#ocrProgress");
+  const bar = $("#ocrBar");
+  const msg = $("#ocrMsg");
+  if (progress) progress.hidden = false;
+
+  const setProgress = (frac, text) => {
+    if (bar) bar.style.width = `${Math.round(frac * 100)}%`;
+    if (msg) msg.textContent = text;
+  };
+
+  try {
+    setProgress(0, "Loading OCR engine…");
+    const text = await ocrPdf(file, (p) => {
+      if (p.phase === "engine") {
+        setProgress(0, `Preparing OCR engine — ${p.status}…`);
+      } else if (p.phase === "page") {
+        // Overall fraction = completed pages + this page's progress.
+        const frac = (p.page - 1 + (p.progress || 0)) / p.total;
+        setProgress(frac, `OCR page ${p.page} of ${p.total} — ${Math.round((p.progress || 0) * 100)}%`);
+      }
+    });
+    if (!text || !text.trim()) {
+      setStatus("OCR finished but found no readable text on the pages.", "error");
+      return;
+    }
+    $("#ocr").hidden = true;
+    await finish(text, file.name);
+  } catch (err) {
+    console.error(err);
+    setStatus(`OCR error: ${err.message}`, "error");
+    if (btn) btn.disabled = false;
+  }
+}
+
 // --- main flow ------------------------------------------------------------
+
+function resetPanels() {
+  current = null;
+  for (const id of ["#summary", "#flags", "#chunks", "#ocr"]) {
+    const el = $(id);
+    el.hidden = true;
+    el.innerHTML = "";
+  }
+}
+
+// Run the deterministic pipeline on extracted text and render the results.
+async function finish(text, sourceName) {
+  setStatus("Processing…", "info");
+  // Yield once so the status paints before the (synchronous) heavy work.
+  await new Promise((r) => setTimeout(r, 0));
+  const result = processBook(text, DEFAULT_MAX_CHARS);
+  result.sourceName = sourceName;
+  current = result;
+
+  renderSummary(result, sourceName);
+  renderChunks(result);
+  renderFlags(result);
+  setStatus("", "info");
+}
 
 async function handleFile(file) {
   const ext = fileExtension(file.name);
@@ -166,24 +257,24 @@ async function handleFile(file) {
     setStatus(`Unsupported file type "${ext || "?"}". Use .txt, .epub, or .pdf.`, "error");
     return;
   }
+  resetPanels();
   setStatus(`Reading ${file.name}…`, "info");
   try {
-    const raw = await ingest(file);
-    if (!raw || !raw.trim()) {
+    const { text, numPages } = await ingest(file);
+
+    // Scanned PDFs have no usable text layer — offer in-browser OCR instead of
+    // failing or processing an empty document.
+    if (ext === ".pdf" && pdfLooksScanned(text, numPages)) {
+      setStatus("", "info");
+      offerOcr(file, { empty: !text || !text.trim() });
+      return;
+    }
+
+    if (!text || !text.trim()) {
       setStatus("No text could be extracted from that file.", "error");
       return;
     }
-    setStatus("Processing…", "info");
-    // Yield once so the status paints before the (synchronous) heavy work.
-    await new Promise((r) => setTimeout(r, 0));
-    const result = processBook(raw, DEFAULT_MAX_CHARS);
-    result.sourceName = file.name;
-    current = result;
-
-    renderSummary(result, file.name);
-    renderChunks(result);
-    renderFlags(result);
-    setStatus("", "info");
+    await finish(text, file.name);
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${err.message}`, "error");

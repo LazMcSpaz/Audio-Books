@@ -172,32 +172,57 @@ just as it was under Pages.
 
 ### Libraries
 
-The app loads two parsing libraries in the browser from cdnjs:
+The app loads its parsing libraries in the browser from CDN:
 
 - **[JSZip](https://stuk.github.io/jszip/)** — unzips EPUBs and builds the
   ZIP download.
-- **[pdf.js](https://mozilla.github.io/pdf.js/)** — extracts text from PDFs.
+- **[pdf.js](https://mozilla.github.io/pdf.js/)** — extracts text from PDFs and
+  renders pages for OCR.
+- **[Tesseract.js](https://tesseract.projectnaptha.com/)** — in-browser OCR for
+  scanned PDFs (loaded lazily, only when you opt into OCR).
 
 These run entirely client-side and make no API calls. (They are the only
 external network requests the page makes; everything else is local.)
 
+### Scanned / image-only PDFs (OCR)
+
+Some old public-domain books are **scans**: the PDF is a sequence of page images
+with no embedded text layer, so ordinary extraction finds nothing. When the app
+detects this (a PDF with little or no text relative to its page count), it offers
+an **opt-in, in-browser OCR** pass:
+
+- It renders each page with pdf.js and recognizes the text with **Tesseract.js**,
+  a local WASM OCR engine. Nothing is uploaded and no API is called — it stays
+  free and backendless, just like the rest of the app.
+- OCR is **slow** and downloads ~15 MB of engine + English language data on
+  first use. A full book can take several minutes.
+- Per the no-storage rule, Tesseract is run with `cacheMethod: "none"`, so the
+  language data is **not** persisted to IndexedDB (it re-downloads each session).
+- OCR of old scans is **imperfect** — expect to fix recognition typos during the
+  Stage 2 review pass. For badly degraded scans, a dedicated desktop OCR tool may
+  give cleaner results; you can then feed the resulting `.txt` back in.
+
 ### Note on very large PDFs
 
-PDF text extraction runs in the browser via pdf.js. For most public-domain
-books this is fine. If you hit a memory/performance wall on an unusually large
-or image-heavy PDF, convert it to `.txt` or `.epub` first rather than expecting
-a backend — by design there isn't one. (If this ever becomes a routine problem,
-the right fix is to add a `main` Worker script to `wrangler.jsonc` and parse the
-PDF server-side via the `ASSETS`-bound Worker; it is intentionally not added here
-to keep the app free and backendless.)
+PDF text extraction (and OCR) runs in the browser. For most public-domain books
+this is fine. If you hit a memory/performance wall on an unusually large PDF — or
+a very long scan where in-browser OCR is too slow — convert or pre-OCR it to
+`.txt`/`.epub` first and feed that in, rather than expecting a backend; by design
+there isn't one. (If this ever becomes a routine problem, the right fix is to add
+a `main` Worker script to `wrangler.jsonc` and do the heavy lifting server-side
+via the `ASSETS`-bound Worker; it is intentionally not added here to keep the app
+free and backendless.)
 
 ---
 
 ## Design constraints (by request)
 
-- **No AI/API calls** — pure deterministic text processing.
+- **No AI/API calls** — pure deterministic text processing. (The optional OCR
+  pass uses Tesseract.js, which runs **locally** in the browser via WASM — no
+  cloud API, no uploads, no cost.)
 - **No backend** — static files only.
 - **No `localStorage` / `sessionStorage`** — all state lives in memory for the
-  session; reloading the page clears everything.
+  session; reloading the page clears everything. (OCR is run with
+  `cacheMethod: "none"` so it doesn't persist language data to IndexedDB either.)
 - **One file, no round-trips** — a single drag-drop upload; no download/re-upload
   within this stage.

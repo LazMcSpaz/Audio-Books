@@ -81,6 +81,7 @@ main {
 .dropzone__icon { font-size: 2rem; }
 .dropzone__title { font-size: 1.15rem; font-weight: 600; margin: .5rem 0 .25rem; }
 .dropzone__hint { color: var(--muted); margin: 0; font-size: .92rem; }
+.dropzone__hint--sub { font-size: .8rem; margin-top: .35rem; opacity: .85; }
 
 /* Status line */
 .status {
@@ -104,6 +105,24 @@ main {
 }
 .panel h2 { margin: 0 0 .9rem; font-size: 1.15rem; }
 .panel--flags { border-color: var(--warn); background: var(--warn-bg); }
+.panel--ocr { border-color: var(--accent); }
+
+/* OCR progress */
+.ocr-progress { margin-top: 1rem; }
+.ocr-bar {
+  height: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ocr-bar__fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent-2);
+  transition: width .2s ease;
+}
+.ocr-progress p { margin: .5rem 0 0; font-size: .88rem; }
 
 .muted { color: var(--muted); font-weight: 400; }
 .ok { color: var(--ok); }

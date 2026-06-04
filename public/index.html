@@ -37,12 +37,14 @@
         <div class="dropzone__icon">⬆️</div>
         <p class="dropzone__title">Drag &amp; drop a book here</p>
         <p class="dropzone__hint">or click to choose a file — <strong>.txt</strong>, <strong>.epub</strong>, or <strong>.pdf</strong> (one at a time)</p>
+        <p class="dropzone__hint dropzone__hint--sub">Scanned/image PDFs are detected and can be OCR'd in your browser.</p>
       </div>
       <input type="file" id="fileInput" accept=".txt,.epub,.pdf" hidden />
     </section>
 
     <p id="status" class="status" hidden></p>
 
+    <section id="ocr" class="panel panel--ocr" hidden></section>
     <section id="summary" class="panel" hidden></section>
     <section id="flags" class="panel panel--flags" hidden></section>
     <section id="chunks" class="panel" hidden></section>

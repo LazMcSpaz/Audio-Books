@@ -100,15 +100,18 @@ async function readPdf(file) {
     }
     pages.push(pageText.trim());
   }
-  return pages.join("\n\n");
+  // numPages lets the caller detect image-only scans (little/no text layer).
+  return { text: pages.join("\n\n"), numPages: pdf.numPages };
 }
 
 // --- dispatch -------------------------------------------------------------
 
+// Returns { text, numPages? }. numPages is only present for PDFs and is used to
+// decide whether a PDF is a scan that needs the OCR fallback.
 export async function ingest(file) {
   const ext = fileExtension(file.name);
-  if (ext === ".txt") return await readTxt(file);
-  if (ext === ".epub") return await readEpub(file);
+  if (ext === ".txt") return { text: await readTxt(file) };
+  if (ext === ".epub") return { text: await readEpub(file) };
   if (ext === ".pdf") return await readPdf(file);
   throw new Error(`Unsupported format: ${ext || "(none)"}. Use .txt, .epub, or .pdf`);
 }
