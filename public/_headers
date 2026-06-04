@@ -1,5 +1,5 @@
-# Cloudflare Pages static headers.
-# https://developers.cloudflare.com/pages/configuration/headers/
+# Static security headers, honored natively by Workers static assets.
+# https://developers.cloudflare.com/workers/static-assets/headers/
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

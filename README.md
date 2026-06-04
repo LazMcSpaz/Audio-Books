@@ -25,16 +25,20 @@ Stage 1 deliberately **never guesses** on ambiguous cases. It leaves them
 untouched and writes them to `_REVIEW_FLAGS.txt` with surrounding context so the
 Stage 2 reviewer (human + Claude) can resolve them deliberately.
 
-### Folder convention
+### Repo layout
 
 ```
-/incoming   Source books you start from (.txt / .epub / .pdf).
-/chunks     Stage 1 output: ch001_part01.txt … plus _REVIEW_FLAGS.txt.
-/final      Stage 2 output: the reviewed, break-tagged chunks ready to narrate.
+public/          The static web app that gets deployed (index.html, css/, js/, _headers).
+wrangler.jsonc   Cloudflare Workers static-assets config (points at ./public).
+/incoming        Source books you start from (.txt / .epub / .pdf).
+/chunks          Stage 1 output: ch001_part01.txt … plus _REVIEW_FLAGS.txt.
+/final           Stage 2 output: the reviewed, break-tagged chunks ready to narrate.
 ```
 
-These folders are part of the repo as a documented convention. The web app
-itself does **not** read or write them — it produces downloads in the browser.
+Only `public/` is published to the web. The `/incoming`, `/chunks`, and `/final`
+folders are a documented pipeline convention kept in the repo for organization;
+they are **not** served. The web app itself does **not** read or write them — it
+produces downloads in the browser.
 You save those downloads into `/chunks/<book-name>/` to keep the pipeline tidy.
 See each folder's own `README.md` for details.
 
@@ -109,37 +113,62 @@ These are collected into `_REVIEW_FLAGS.txt` with context, never changed:
 
 ## Running locally
 
-It's a static site — just serve the folder (ES modules require `http://`, not
-`file://`):
+It's a static site — serve the `public/` folder (ES modules require `http://`,
+not `file://`):
 
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 8000 --directory public
 # then open http://localhost:8000
+```
+
+Or, to preview exactly as Cloudflare will serve it (honoring `wrangler.jsonc`
+and `_headers`):
+
+```bash
+npx wrangler dev
 ```
 
 ---
 
-## Cloudflare Pages deployment
+## Cloudflare deployment (Workers static assets)
 
-This is a pure static client-side app, so deployment is trivial:
+Cloudflare has **unified Workers and Pages**, and now recommends **Workers with
+static assets** for new static sites (Pages still works, but new features and
+optimizations target Workers). So this deploys as a **Worker** — a purely static
+one with **no Worker script**. Cloudflare just serves the files in `public/`.
 
-| Setting | Value |
-|---------|-------|
-| **Framework preset** | None |
-| **Build command** | *(leave empty)* |
-| **Build output directory** | `/` (repo root) |
-| **Root directory** | *(leave empty)* |
+The config is `wrangler.jsonc`:
 
-Steps:
+```jsonc
+{
+  "name": "audiobook-prep",
+  "compatibility_date": "2026-06-04",
+  "assets": { "directory": "./public" }
+}
+```
+
+There is no `main` (no server code), no build step, and no Functions.
+
+### Deploy by connecting Git (recommended)
 
 1. Push this repo to GitHub.
-2. In the Cloudflare dashboard: **Workers & Pages → Create → Pages → Connect to
-   Git**, and select this repo.
-3. Use the settings above (no build step — Cloudflare just serves the files).
+2. Cloudflare dashboard → **Workers & Pages → Create → Workers → Import a
+   repository** (Workers Builds) → select this repo.
+3. Build settings:
+   - **Build command:** *(leave empty — nothing to build)*
+   - **Deploy command:** `npx wrangler deploy`
+   - Cloudflare reads `wrangler.jsonc` and uploads `public/` as static assets.
 4. Deploy. Every push to the connected branch redeploys automatically.
 
-No **Pages Functions** are needed — there is no server-side code. `_headers`
-applies a few static security headers and is honored automatically by Pages.
+### Or deploy from your machine
+
+```bash
+npx wrangler deploy
+```
+
+`_headers` (a few static security headers) lives inside `public/` and is
+[honored natively by Workers static assets](https://developers.cloudflare.com/workers/static-assets/headers/),
+just as it was under Pages.
 
 ### Libraries
 
@@ -158,8 +187,9 @@ PDF text extraction runs in the browser via pdf.js. For most public-domain
 books this is fine. If you hit a memory/performance wall on an unusually large
 or image-heavy PDF, convert it to `.txt` or `.epub` first rather than expecting
 a backend — by design there isn't one. (If this ever becomes a routine problem,
-the right fix is a Cloudflare Pages Function for PDF parsing; it is intentionally
-not added here to keep the app free and backendless.)
+the right fix is to add a `main` Worker script to `wrangler.jsonc` and parse the
+PDF server-side via the `ASSETS`-bound Worker; it is intentionally not added here
+to keep the app free and backendless.)
 
 ---
 

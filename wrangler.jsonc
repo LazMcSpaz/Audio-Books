@@ -1,0 +1,17 @@
+{
+  // Cloudflare Workers Static Assets config.
+  // Workers + Pages are now unified; Cloudflare recommends Workers (with
+  // static assets) for new static sites. This app is purely static — there is
+  // NO Worker script (`main`), so Cloudflare just serves the files in
+  // `public/` directly. No backend, no functions, no AI/API calls.
+  // Docs: https://developers.cloudflare.com/workers/static-assets/
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "audiobook-prep",
+  // Set to the date this config was created; bump intentionally if needed.
+  "compatibility_date": "2026-06-04",
+  "assets": {
+    // Only the web app is published. The /incoming, /chunks, /final pipeline
+    // folders and the docs at the repo root are intentionally left out.
+    "directory": "./public"
+  }
+}
