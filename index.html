@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audiobook Prep — Stage 1</title>
+  <meta name="description" content="Client-side prep of public-domain books for ElevenLabs narration. No uploads, no backend, no AI calls." />
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- Parsing libraries (loaded in the browser; the app makes no API calls).
+       JSZip: EPUB unzip + ZIP export. pdf.js: PDF text extraction. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // pdf.js needs a worker; point it at the matching CDN build.
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>📖 Audiobook Prep <span class="tag">Stage 1</span></h1>
+    <p class="subtitle">
+      Deterministic, client-side cleaning &amp; chunking of public-domain books for
+      ElevenLabs. Nothing is uploaded — all processing happens in your browser.
+    </p>
+  </header>
+
+  <main>
+    <section id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Upload a .txt, .epub, or .pdf book">
+      <div class="dropzone__inner">
+        <div class="dropzone__icon">⬆️</div>
+        <p class="dropzone__title">Drag &amp; drop a book here</p>
+        <p class="dropzone__hint">or click to choose a file — <strong>.txt</strong>, <strong>.epub</strong>, or <strong>.pdf</strong> (one at a time)</p>
+      </div>
+      <input type="file" id="fileInput" accept=".txt,.epub,.pdf" hidden />
+    </section>
+
+    <p id="status" class="status" hidden></p>
+
+    <section id="summary" class="panel" hidden></section>
+    <section id="flags" class="panel panel--flags" hidden></section>
+    <section id="chunks" class="panel" hidden></section>
+  </main>
+
+  <footer class="footer">
+    <p>
+      Stage 1 of a two-stage pipeline. Output goes to <code>/chunks</code>;
+      a Claude Code review pass produces <code>/final</code>. No data leaves your browser.
+    </p>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

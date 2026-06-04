@@ -1,0 +1,15 @@
+# Keep the pipeline folder convention tracked (READMEs) but don't commit the
+# actual book files / generated chunks — those are per-book working data.
+incoming/*
+chunks/*
+final/*
+!incoming/README.md
+!chunks/README.md
+!final/README.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
