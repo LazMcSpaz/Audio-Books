@@ -7,6 +7,12 @@ final/*
 !chunks/README.md
 !final/README.md
 
+# Worker / Wrangler — never commit local secrets or build artifacts
+.dev.vars
+.wrangler/
+node_modules/
+dist/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

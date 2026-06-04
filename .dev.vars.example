@@ -1,0 +1,4 @@
+# Local-dev secrets for `npx wrangler dev`. Copy to `.dev.vars` (gitignored) and
+# fill in. In production these are set with `wrangler secret put` instead.
+GITHUB_TOKEN=github_pat_xxx_fine_grained_this_repo_contents_write
+APP_PASSWORD=choose-a-strong-password

@@ -4,11 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Audiobook Prep — Stage 1</title>
-  <meta name="description" content="Client-side prep of public-domain books for ElevenLabs narration. No uploads, no backend, no AI calls." />
+  <meta name="description" content="Client-side prep of public-domain books for ElevenLabs narration. Batch processing, in-browser OCR, optional push to a repo branch." />
   <link rel="stylesheet" href="css/style.css" />
 
-  <!-- Parsing libraries (loaded in the browser; the app makes no API calls).
-       JSZip: EPUB unzip + ZIP export. pdf.js: PDF text extraction. -->
+  <!-- Parsing libraries (run in the browser). JSZip: EPUB unzip + ZIP export.
+       pdf.js: PDF text extraction + page rendering for OCR. Tesseract.js (OCR)
+       is loaded lazily only when a scan needs it. -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
@@ -25,35 +26,57 @@
   <header class="topbar">
     <h1>📖 Audiobook Prep <span class="tag">Stage 1</span></h1>
     <p class="subtitle">
-      Deterministic, client-side cleaning &amp; chunking of public-domain books for
-      ElevenLabs. Nothing is uploaded — all processing happens in your browser.
+      Deterministic cleaning &amp; chunking of public-domain books for ElevenLabs.
+      Batch-load several at once, OCR scanned PDFs in-browser, and optionally push
+      the results straight to a repo branch.
     </p>
   </header>
 
   <main>
     <section id="dropzone" class="dropzone" tabindex="0" role="button"
-             aria-label="Upload a .txt, .epub, or .pdf book">
+             aria-label="Add .txt, .epub, or .pdf books">
       <div class="dropzone__inner">
         <div class="dropzone__icon">⬆️</div>
-        <p class="dropzone__title">Drag &amp; drop a book here</p>
-        <p class="dropzone__hint">or click to choose a file — <strong>.txt</strong>, <strong>.epub</strong>, or <strong>.pdf</strong> (one at a time)</p>
-        <p class="dropzone__hint dropzone__hint--sub">Scanned/image PDFs are detected and can be OCR'd in your browser.</p>
+        <p class="dropzone__title">Drag &amp; drop books here</p>
+        <p class="dropzone__hint">or click to choose files — <strong>.txt</strong>, <strong>.epub</strong>, <strong>.pdf</strong> (select as many as you like)</p>
+        <p class="dropzone__hint dropzone__hint--sub">Scanned/image PDFs are detected and OCR'd in your browser when auto-OCR is on.</p>
       </div>
-      <input type="file" id="fileInput" accept=".txt,.epub,.pdf" hidden />
+      <input type="file" id="fileInput" accept=".txt,.epub,.pdf" multiple hidden />
     </section>
 
     <p id="status" class="status" hidden></p>
 
-    <section id="ocr" class="panel panel--ocr" hidden></section>
-    <section id="summary" class="panel" hidden></section>
-    <section id="flags" class="panel panel--flags" hidden></section>
-    <section id="chunks" class="panel" hidden></section>
+    <section class="panel controls">
+      <label class="ctl-row">
+        <input type="checkbox" id="autoOcr" checked />
+        <span>Auto-OCR scanned PDFs (needed for unattended batches)</span>
+      </label>
+
+      <div class="ctl-row ctl-row--gh">
+        <div class="gh-connect">
+          <label for="appPassword">Push to repo (optional):</label>
+          <input type="password" id="appPassword" placeholder="app password" autocomplete="off" />
+          <button id="connectBtn" class="btn">Connect</button>
+        </div>
+        <p id="ghStatus" class="small muted">Not connected — results stay local (download as ZIP). Connect to auto-push each finished book to the repo branch.</p>
+      </div>
+
+      <div class="actions">
+        <button id="startBtn" class="btn btn--primary" disabled>Start processing</button>
+        <button id="zipAllBtn" class="btn" hidden>Download all as ZIP</button>
+        <button id="clearBtn" class="btn" disabled>Clear list</button>
+      </div>
+    </section>
+
+    <section id="batch" class="panel" hidden></section>
   </main>
 
   <footer class="footer">
     <p>
-      Stage 1 of a two-stage pipeline. Output goes to <code>/chunks</code>;
-      a Claude Code review pass produces <code>/final</code>. No data leaves your browser.
+      Stage 1 of a two-stage pipeline. Output goes to <code>/chunks</code> (on the
+      push branch); a Claude Code review pass produces <code>/final</code>.
+      Text processing &amp; OCR run in your browser; only the finished chunk files
+      are sent to the backend when you opt to push.
     </p>
   </footer>
 

@@ -1,25 +1,50 @@
 /*
- * app.js — UI glue. Wires the drag-drop zone to the ingest + processing
- * pipeline and renders the summary, chunk list, and review-flags panels.
+ * app.js — batch controller.
  *
- * State lives only in memory for the session — no localStorage/sessionStorage.
+ * Load many books at once, process them sequentially (OCR'ing scanned PDFs
+ * automatically when enabled), and — if connected to the Worker backend — push
+ * each finished book to the repo branch as it completes. A ZIP-all download is
+ * always available as a fallback.
+ *
+ * All state is in memory for the session (no localStorage/sessionStorage). The
+ * app password is held only in this module's `gh` object and sent per request.
  */
 
 import { ingest, fileExtension } from "./ingest.js";
 import { pdfLooksScanned, ocrPdf } from "./ocr.js";
-import {
-  processBook,
-  estimateMonths,
-  estimateAudioHours,
-  DEFAULT_MAX_CHARS,
-} from "./processing.js";
+import { verifyBackend, pushBook } from "./push.js";
+import { processBook, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
 
 const ACCEPTED = new Set([".txt", ".epub", ".pdf"]);
 
-// In-memory result for the current session (used by ZIP/download actions).
-let current = null;
+const $ = (s) => document.querySelector(s);
+const num = (n) => n.toLocaleString("en-US");
 
-const $ = (sel) => document.querySelector(sel);
+// --- session state (in memory only) ---------------------------------------
+
+let books = [];           // see makeBook()
+let processing = false;
+let autoOcr = true;
+let wakeLock = null;
+let nextId = 1;
+
+const gh = { connected: false, password: null, owner: "", repo: "", branch: "" };
+
+function makeBook(file, slug) {
+  return {
+    id: nextId++,
+    file,
+    slug,
+    name: file.name,
+    status: "queued", // queued | reading | ocr | processing | done | error
+    error: "",
+    ocr: { page: 0, total: 0, progress: 0 },
+    result: null,
+    push: { state: gh.connected ? "idle" : "off", url: "", error: "" }, // off|idle|pushing|pushed|failed
+  };
+}
+
+// --- helpers ---------------------------------------------------------------
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -32,8 +57,25 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-function num(n) {
-  return n.toLocaleString("en-US");
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Filename -> repo-safe slug matching the Worker's /^[a-z0-9][a-z0-9-]{0,80}$/.
+function slugify(filename) {
+  const base = filename.replace(/\.[^.]+$/, "");
+  let s = base.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!/^[a-z0-9]/.test(s)) s = "b-" + s;
+  s = s.slice(0, 80).replace(/-+$/, "");
+  return s || "book";
+}
+
+function uniqueSlug(slug) {
+  const taken = new Set(books.map((b) => b.slug));
+  if (!taken.has(slug)) return slug;
+  let i = 2;
+  while (taken.has(`${slug}-${i}`)) i++;
+  return `${slug}-${i}`;
 }
 
 function setStatus(msg, kind = "info") {
@@ -43,282 +85,337 @@ function setStatus(msg, kind = "info") {
   el.hidden = !msg;
 }
 
-function show(el) { el.hidden = false; }
-
-// --- rendering ------------------------------------------------------------
-
-function renderSummary(result, sourceName) {
-  const months = estimateMonths(result.totalChars);
-  const hours = estimateAudioHours(result.totalChars);
-  $("#summary").innerHTML = `
-    <h2>Processing summary</h2>
-    <p class="muted">Source: <strong>${escapeHtml(sourceName)}</strong></p>
-    <div class="stats">
-      <div class="stat"><span class="stat__n">${num(result.chapterCount)}</span><span class="stat__l">chapters detected</span></div>
-      <div class="stat"><span class="stat__n">${num(result.chunkCount)}</span><span class="stat__l">chunks generated</span></div>
-      <div class="stat"><span class="stat__n">${num(result.totalChars)}</span><span class="stat__l">total characters</span></div>
-      <div class="stat"><span class="stat__n">${months.toFixed(1)}</span><span class="stat__l">Creator-plan months<br><small>(100k chars/mo)</small></span></div>
-      <div class="stat"><span class="stat__n">~${hours.toFixed(1)}</span><span class="stat__l">estimated audio hours</span></div>
-      <div class="stat"><span class="stat__n">${num(result.flags.length)}</span><span class="stat__l">items to review</span></div>
-    </div>
-    <div class="actions">
-      <button id="downloadZip" class="btn btn--primary">Download all as ZIP</button>
-      <button id="downloadFlags" class="btn">Download _REVIEW_FLAGS.txt</button>
-    </div>
-  `;
-  show($("#summary"));
-  $("#downloadZip").addEventListener("click", onDownloadZip);
-  $("#downloadFlags").addEventListener("click", onDownloadFlags);
+// Chunk files + the per-book review flags file, ready for ZIP/push.
+function bookFiles(result) {
+  const files = result.files.map((f) => ({ name: f.name, text: f.text }));
+  files.push({ name: "_REVIEW_FLAGS.txt", text: result.reviewFlagsText });
+  return files;
 }
 
-function renderChunks(result) {
-  const rows = result.files
-    .map(
-      (f) => `
-      <li class="chunk">
-        <span class="chunk__name">${escapeHtml(f.name)}</span>
-        <span class="chunk__title">${escapeHtml(f.title)}</span>
-        <span class="chunk__chars ${f.chars > 5000 ? "over" : ""}">${num(f.chars)} chars</span>
-        <button class="btn btn--sm" data-file="${escapeHtml(f.name)}">download</button>
-      </li>`
-    )
+// --- wake lock (keep the screen on during a long batch) --------------------
+
+async function acquireWakeLock() {
+  try {
+    if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+  } catch {
+    wakeLock = null;
+  }
+}
+function releaseWakeLock() {
+  try {
+    if (wakeLock) wakeLock.release();
+  } catch {
+    /* ignore */
+  }
+  wakeLock = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (processing && wakeLock === null && document.visibilityState === "visible") acquireWakeLock();
+});
+
+// --- rendering -------------------------------------------------------------
+
+function statusCell(b) {
+  switch (b.status) {
+    case "queued": return `<span class="bdg">Queued</span>`;
+    case "reading": return `<span class="bdg bdg--busy">Reading…</span>`;
+    case "ocr": {
+      const pct = Math.round((b.ocr.page - 1 + (b.ocr.progress || 0)) / Math.max(b.ocr.total, 1) * 100);
+      return `<span class="bdg bdg--busy">OCR ${b.ocr.page}/${b.ocr.total}</span>
+        <div class="rowbar"><div class="rowbar__fill" style="width:${pct}%"></div></div>`;
+    }
+    case "processing": return `<span class="bdg bdg--busy">Processing…</span>`;
+    case "error": return `<span class="bdg bdg--err">Error</span>`;
+    case "done": {
+      const r = b.result;
+      return `<span class="bdg bdg--ok">✓ ${num(r.chunkCount)} chunks</span>
+        <span class="muted small">${num(r.totalChars)} chars · ${r.flags.length} flags · ~${estimateAudioHours(r.totalChars).toFixed(1)}h</span>`;
+    }
+    default: return "";
+  }
+}
+
+function pushCell(b) {
+  if (b.status !== "done") return "";
+  switch (b.push.state) {
+    case "off": return `<span class="muted small">not pushed (no backend)</span>`;
+    case "idle": return `<span class="muted small">waiting to push…</span>`;
+    case "pushing": return `<span class="bdg bdg--busy">Pushing…</span>`;
+    case "pushed": return `<a class="small ok" href="${escapeHtml(b.push.url)}" target="_blank" rel="noreferrer">✓ pushed to branch ↗</a>`;
+    case "failed": return `<span class="bdg bdg--err">push failed</span> <span class="muted small">${escapeHtml(b.push.error)}</span>`;
+    default: return "";
+  }
+}
+
+function detailsCell(b) {
+  if (b.status === "error") return `<p class="small err-text">${escapeHtml(b.error)}</p>`;
+  if (b.status !== "done") return "";
+  const r = b.result;
+  const fileList = r.files
+    .map((f) => `<li><code>${escapeHtml(f.name)}</code> <span class="muted">${num(f.chars)} chars${f.chars > 5000 ? " ⚠️" : ""}</span></li>`)
     .join("");
-  $("#chunks").innerHTML = `
-    <h2>Generated chunks <span class="muted">(${result.files.length})</span></h2>
-    <ul class="chunk-list">${rows}</ul>
-  `;
-  show($("#chunks"));
-  $("#chunks").querySelectorAll("button[data-file]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const f = current.files.find((x) => x.name === btn.dataset.file);
-      if (f) downloadBlob(new Blob([f.text], { type: "text/plain" }), f.name);
-    });
-  });
-}
-
-function renderFlags(result) {
-  const panel = $("#flags");
-  if (result.flags.length === 0) {
-    panel.innerHTML = `<h2>Review flags</h2><p class="ok">No ambiguous items detected. 🎉</p>`;
-    show(panel);
-    return;
+  let flagsHtml = `<p class="ok small">No ambiguous items flagged.</p>`;
+  if (r.flags.length) {
+    const groups = new Map();
+    for (const f of r.flags) {
+      if (!groups.has(f.note)) groups.set(f.note, []);
+      groups.get(f.note).push(f);
+    }
+    flagsHtml = [...groups]
+      .map(([note, items]) =>
+        `<details class="flag-group"><summary>${escapeHtml(note)} <span class="badge">${items.length}</span></summary>
+          <ul>${items.map((it) => `<li><code>${escapeHtml(it.snippet)}</code></li>`).join("")}</ul></details>`)
+      .join("");
   }
-  // Group by note for a scannable view.
-  const groups = new Map();
-  for (const f of result.flags) {
-    if (!groups.has(f.note)) groups.set(f.note, []);
-    groups.get(f.note).push(f);
-  }
-  let html = `<h2>⚠️ Review flags <span class="muted">(${result.flags.length})</span></h2>
-    <p class="muted">These were left <strong>untouched</strong>. Resolve them in the Stage 2 review pass.</p>`;
-  for (const [note, items] of groups) {
-    html += `<details open class="flag-group">
-      <summary>${escapeHtml(note)} <span class="badge">${items.length}</span></summary>
-      <ul>${items
-        .map((it) => `<li><code>${escapeHtml(it.snippet)}</code></li>`)
-        .join("")}</ul>
+  return `
+    <details class="book-details">
+      <summary>Files (${r.files.length}) &amp; review flags (${r.flags.length})</summary>
+      <div class="book-details__body">
+        <button class="btn btn--sm" data-zip="${b.id}">Download this book as ZIP</button>
+        <h4>Chunks</h4><ul class="file-list">${fileList}</ul>
+        <h4>Review flags</h4>${flagsHtml}
+      </div>
     </details>`;
-  }
-  panel.innerHTML = html;
-  show(panel);
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function rowInner(b) {
+  return `
+    <div class="book-row__head">
+      <span class="book-row__name">${escapeHtml(b.name)}</span>
+      <span class="book-row__slug muted small">chunks/${escapeHtml(b.slug)}/</span>
+    </div>
+    <div class="book-row__status">${statusCell(b)}</div>
+    <div class="book-row__push">${pushCell(b)}</div>
+    ${detailsCell(b)}`;
 }
 
-// --- actions --------------------------------------------------------------
-
-async function onDownloadZip() {
-  if (!current) return;
-  if (typeof JSZip === "undefined") {
-    setStatus("JSZip unavailable — use the per-file download buttons instead.", "error");
+function renderBatch() {
+  const panel = $("#batch");
+  if (books.length === 0) {
+    panel.hidden = true;
+    panel.innerHTML = "";
     return;
   }
-  const zip = new JSZip();
-  for (const f of current.files) zip.file(f.name, f.text);
-  zip.file("_REVIEW_FLAGS.txt", current.reviewFlagsText);
-  const blob = await zip.generateAsync({ type: "blob" });
-  const base = current.sourceName.replace(/\.[^.]+$/, "") || "book";
-  downloadBlob(blob, `${base}_chunks.zip`);
-}
-
-function onDownloadFlags() {
-  if (!current) return;
-  downloadBlob(
-    new Blob([current.reviewFlagsText], { type: "text/plain" }),
-    "_REVIEW_FLAGS.txt"
+  const doneCount = books.filter((b) => b.status === "done").length;
+  const rows = books.map((b) => `<li class="book-row" id="book-${b.id}">${rowInner(b)}</li>`).join("");
+  panel.innerHTML = `
+    <h2>Books <span class="muted">(${doneCount}/${books.length} done)</span></h2>
+    <ul class="book-list">${rows}</ul>`;
+  panel.hidden = false;
+  panel.querySelectorAll("button[data-zip]").forEach((btn) =>
+    btn.addEventListener("click", () => downloadBookZip(Number(btn.dataset.zip)))
   );
 }
 
-// --- OCR fallback (scanned / image-only PDFs) -----------------------------
-
-// Render the opt-in OCR offer when a PDF has no usable text layer.
-function offerOcr(file, { empty } = {}) {
-  current = null;
-  const panel = $("#ocr");
-  const lead = empty
-    ? `<strong>No text could be extracted from this PDF.</strong> It looks like a
-       scan (page images with no text layer).`
-    : `<strong>This PDF looks like a scan</strong> — page images with little or no
-       embedded text.`;
-  panel.innerHTML = `
-    <h2>📄 Scanned PDF detected</h2>
-    <p>${lead}</p>
-    <p class="muted">
-      You can run <strong>OCR in your browser</strong> to read the text off the
-      page images. It runs locally — nothing is uploaded and no API is called —
-      but it's slow and downloads ~15&nbsp;MB of engine/language data on first
-      use. OCR of old scans is imperfect; expect to fix typos in the Stage 2
-      review pass.
-    </p>
-    <div class="actions">
-      <button id="runOcr" class="btn btn--primary">Run OCR in browser</button>
-    </div>
-    <div id="ocrProgress" class="ocr-progress" hidden>
-      <div class="ocr-bar"><div id="ocrBar" class="ocr-bar__fill"></div></div>
-      <p id="ocrMsg" class="muted"></p>
-    </div>
-  `;
-  show(panel);
-  $("#runOcr").addEventListener("click", () => runOcr(file));
+function updateRow(b) {
+  const li = document.getElementById(`book-${b.id}`);
+  if (li) li.innerHTML = rowInner(b);
+  // Keep the done-count header fresh.
+  const header = $("#batch h2 .muted");
+  if (header) header.textContent = `(${books.filter((x) => x.status === "done").length}/${books.length} done)`;
 }
 
-async function runOcr(file) {
-  const btn = $("#runOcr");
-  if (btn) btn.disabled = true;
-  const progress = $("#ocrProgress");
-  const bar = $("#ocrBar");
-  const msg = $("#ocrMsg");
-  if (progress) progress.hidden = false;
+function updateControls() {
+  const hasQueued = books.some((b) => b.status === "queued");
+  const hasDone = books.some((b) => b.status === "done");
+  $("#startBtn").disabled = processing || !hasQueued;
+  $("#startBtn").textContent = processing ? "Processing…" : "Start processing";
+  $("#zipAllBtn").hidden = !hasDone;
+  $("#clearBtn").disabled = processing || books.length === 0;
+}
 
-  const setProgress = (frac, text) => {
-    if (bar) bar.style.width = `${Math.round(frac * 100)}%`;
-    if (msg) msg.textContent = text;
-  };
+// --- GitHub backend connect ------------------------------------------------
 
+async function connectBackend() {
+  const pw = $("#appPassword").value.trim();
+  const statusEl = $("#ghStatus");
+  if (!pw) {
+    statusEl.textContent = "Enter the app password first.";
+    statusEl.className = "small err-text";
+    return;
+  }
+  $("#connectBtn").disabled = true;
+  statusEl.textContent = "Connecting…";
+  statusEl.className = "small muted";
   try {
-    setProgress(0, "Loading OCR engine…");
-    const text = await ocrPdf(file, (p) => {
-      if (p.phase === "engine") {
-        setProgress(0, `Preparing OCR engine — ${p.status}…`);
-      } else if (p.phase === "page") {
-        // Overall fraction = completed pages + this page's progress.
-        const frac = (p.page - 1 + (p.progress || 0)) / p.total;
-        setProgress(frac, `OCR page ${p.page} of ${p.total} — ${Math.round((p.progress || 0) * 100)}%`);
-      }
-    });
-    if (!text || !text.trim()) {
-      setStatus("OCR finished but found no readable text on the pages.", "error");
-      return;
+    const info = await verifyBackend(pw);
+    gh.connected = true;
+    gh.password = pw;
+    gh.owner = info.owner;
+    gh.repo = info.repo;
+    gh.branch = info.branch;
+    statusEl.innerHTML = `✓ Connected — will push to <code>${escapeHtml(info.owner)}/${escapeHtml(info.repo)}</code> branch <code>${escapeHtml(info.branch)}</code>`;
+    statusEl.className = "small ok";
+    // Books already queued should now intend to push.
+    for (const b of books) if (b.push.state === "off") b.push.state = "idle";
+    renderBatch();
+  } catch (err) {
+    gh.connected = false;
+    gh.password = null;
+    statusEl.textContent = `Connect failed: ${err.message}`;
+    statusEl.className = "small err-text";
+  } finally {
+    $("#connectBtn").disabled = false;
+  }
+}
+
+// --- processing pipeline ---------------------------------------------------
+
+function addFiles(fileList) {
+  let added = 0;
+  for (const file of fileList) {
+    if (!ACCEPTED.has(fileExtension(file.name))) {
+      setStatus(`Skipped "${file.name}" — only .txt, .epub, .pdf are supported.`, "error");
+      continue;
     }
-    $("#ocr").hidden = true;
-    await finish(text, file.name);
+    const slug = uniqueSlug(slugify(file.name));
+    books.push(makeBook(file, slug));
+    added++;
+  }
+  if (added) setStatus("", "info");
+  renderBatch();
+  updateControls();
+}
+
+async function processOne(b) {
+  try {
+    b.status = "reading";
+    updateRow(b);
+    const ext = fileExtension(b.name);
+    let text;
+    const ing = await ingest(b.file);
+    text = ing.text;
+
+    if (ext === ".pdf" && pdfLooksScanned(text, ing.numPages)) {
+      if (!autoOcr) {
+        throw new Error("Looks like a scanned PDF, but auto-OCR is off. Enable auto-OCR and re-run.");
+      }
+      b.status = "ocr";
+      b.ocr = { page: 0, total: ing.numPages || 0, progress: 0 };
+      updateRow(b);
+      text = await ocrPdf(b.file, (p) => {
+        if (p.phase === "page") {
+          b.ocr = { page: p.page, total: p.total, progress: p.progress || 0 };
+          updateRow(b);
+        }
+      });
+    }
+
+    if (!text || !text.trim()) throw new Error("No text could be extracted.");
+
+    b.status = "processing";
+    updateRow(b);
+    await new Promise((r) => setTimeout(r, 0)); // let the row paint
+    b.result = processBook(text, DEFAULT_MAX_CHARS);
+    b.status = "done";
+    updateRow(b);
+
+    if (gh.connected) await pushOne(b);
   } catch (err) {
     console.error(err);
-    setStatus(`OCR error: ${err.message}`, "error");
-    if (btn) btn.disabled = false;
+    b.status = "error";
+    b.error = err.message;
+    updateRow(b);
   }
 }
 
-// --- main flow ------------------------------------------------------------
+async function pushOne(b) {
+  b.push.state = "pushing";
+  updateRow(b);
+  try {
+    const res = await pushBook(gh.password, b.slug, bookFiles(b.result));
+    b.push.state = "pushed";
+    b.push.url = res.htmlUrl;
+  } catch (err) {
+    b.push.state = "failed";
+    b.push.error = err.message;
+  }
+  updateRow(b);
+}
 
-function resetPanels() {
-  current = null;
-  for (const id of ["#summary", "#flags", "#chunks", "#ocr"]) {
-    const el = $(id);
-    el.hidden = true;
-    el.innerHTML = "";
+async function startProcessing() {
+  if (processing) return;
+  processing = true;
+  updateControls();
+  await acquireWakeLock();
+  try {
+    // Re-read each time so books added mid-run (queued) are still picked up.
+    for (let i = 0; i < books.length; i++) {
+      if (books[i].status === "queued") await processOne(books[i]);
+    }
+  } finally {
+    releaseWakeLock();
+    processing = false;
+    updateControls();
   }
 }
 
-// Run the deterministic pipeline on extracted text and render the results.
-async function finish(text, sourceName) {
-  setStatus("Processing…", "info");
-  // Yield once so the status paints before the (synchronous) heavy work.
-  await new Promise((r) => setTimeout(r, 0));
-  const result = processBook(text, DEFAULT_MAX_CHARS);
-  result.sourceName = sourceName;
-  current = result;
+// --- downloads -------------------------------------------------------------
 
-  renderSummary(result, sourceName);
-  renderChunks(result);
-  renderFlags(result);
+async function downloadBookZip(id) {
+  const b = books.find((x) => x.id === id);
+  if (!b || !b.result || typeof JSZip === "undefined") return;
+  const zip = new JSZip();
+  const folder = zip.folder(`chunks/${b.slug}`);
+  for (const f of bookFiles(b.result)) folder.file(f.name, f.text);
+  downloadBlob(await zip.generateAsync({ type: "blob" }), `${b.slug}_chunks.zip`);
+}
+
+async function downloadAllZip() {
+  if (typeof JSZip === "undefined") {
+    setStatus("JSZip unavailable — use per-book download buttons instead.", "error");
+    return;
+  }
+  const done = books.filter((b) => b.status === "done");
+  if (!done.length) return;
+  const zip = new JSZip();
+  for (const b of done) {
+    const folder = zip.folder(`chunks/${b.slug}`);
+    for (const f of bookFiles(b.result)) folder.file(f.name, f.text);
+  }
+  downloadBlob(await zip.generateAsync({ type: "blob" }), "audiobook_chunks.zip");
+}
+
+function clearAll() {
+  if (processing) return;
+  books = [];
+  renderBatch();
+  updateControls();
   setStatus("", "info");
 }
 
-async function handleFile(file) {
-  const ext = fileExtension(file.name);
-  if (!ACCEPTED.has(ext)) {
-    setStatus(`Unsupported file type "${ext || "?"}". Use .txt, .epub, or .pdf.`, "error");
-    return;
-  }
-  resetPanels();
-  setStatus(`Reading ${file.name}…`, "info");
-  try {
-    const { text, numPages } = await ingest(file);
+// --- wiring ----------------------------------------------------------------
 
-    // Scanned PDFs have no usable text layer — offer in-browser OCR instead of
-    // failing or processing an empty document.
-    if (ext === ".pdf" && pdfLooksScanned(text, numPages)) {
-      setStatus("", "info");
-      offerOcr(file, { empty: !text || !text.trim() });
-      return;
-    }
-
-    if (!text || !text.trim()) {
-      setStatus("No text could be extracted from that file.", "error");
-      return;
-    }
-    await finish(text, file.name);
-  } catch (err) {
-    console.error(err);
-    setStatus(`Error: ${err.message}`, "error");
-  }
-}
-
-function wireDropZone() {
+function wire() {
   const dz = $("#dropzone");
   const input = $("#fileInput");
 
   dz.addEventListener("click", () => input.click());
   dz.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      input.click();
-    }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
   });
-
   input.addEventListener("change", () => {
-    if (input.files.length) handleFile(input.files[0]);
-    input.value = ""; // allow re-selecting the same file
+    if (input.files.length) addFiles(input.files);
+    input.value = "";
   });
-
   ["dragenter", "dragover"].forEach((ev) =>
-    dz.addEventListener(ev, (e) => {
-      e.preventDefault();
-      dz.classList.add("dropzone--active");
-    })
+    dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("dropzone--active"); })
   );
   ["dragleave", "drop"].forEach((ev) =>
-    dz.addEventListener(ev, (e) => {
-      e.preventDefault();
-      dz.classList.remove("dropzone--active");
-    })
+    dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("dropzone--active"); })
   );
-
   dz.addEventListener("drop", (e) => {
-    const files = e.dataTransfer.files;
-    if (files.length > 1) {
-      setStatus("Please drop only one file at a time.", "error");
-      return;
-    }
-    if (files.length === 1) handleFile(files[0]);
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   });
+
+  $("#autoOcr").addEventListener("change", (e) => { autoOcr = e.target.checked; });
+  $("#connectBtn").addEventListener("click", connectBackend);
+  $("#appPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") connectBackend(); });
+  $("#startBtn").addEventListener("click", startProcessing);
+  $("#zipAllBtn").addEventListener("click", downloadAllZip);
+  $("#clearBtn").addEventListener("click", clearAll);
+
+  updateControls();
 }
 
-wireDropZone();
+wire();

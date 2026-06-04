@@ -8,8 +8,9 @@ Save the web app's output here, one folder per book:
 /chunks/the-time-machine/_REVIEW_FLAGS.txt
 ```
 
-The easiest path: click **Download all as ZIP** in the app and unzip it into
-`/chunks/<book-name>/`.
+When the app's push backend is connected, it commits each finished book here
+automatically (on the `book-chunks` branch). Otherwise, click **Download all as
+ZIP** in the app and unzip it into `/chunks/<book-name>/`.
 
 These are the **mechanically cleaned, correctly-sized** chunks plus the
 `_REVIEW_FLAGS.txt` list of ambiguities. They are *not yet* finished — the

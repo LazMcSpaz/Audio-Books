@@ -1,17 +1,28 @@
 {
-  // Cloudflare Workers Static Assets config.
-  // Workers + Pages are now unified; Cloudflare recommends Workers (with
-  // static assets) for new static sites. This app is purely static — there is
-  // NO Worker script (`main`), so Cloudflare just serves the files in
-  // `public/` directly. No backend, no functions, no AI/API calls.
+  // Cloudflare Worker — full-stack. It serves the static web app (from
+  // ./public via the ASSETS binding) AND exposes a small password-gated
+  // /api/push endpoint that commits processed chunks to a branch in this repo.
+  //
+  // Static assets are served first; the Worker script (src/index.js) only runs
+  // for requests that don't match a file (i.e. the /api/* routes).
+  //
+  // Secrets (NOT stored here — set once with `wrangler secret put`):
+  //   GITHUB_TOKEN   fine-grained PAT for this repo, Contents: Read and write
+  //   APP_PASSWORD   the password you type in the app to authorize a push
+  //
   // Docs: https://developers.cloudflare.com/workers/static-assets/
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "audiobook-prep",
-  // Set to the date this config was created; bump intentionally if needed.
+  "main": "src/index.js",
   "compatibility_date": "2026-06-04",
   "assets": {
-    // Only the web app is published. The /incoming, /chunks, /final pipeline
-    // folders and the docs at the repo root are intentionally left out.
-    "directory": "./public"
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  // Non-secret config. The push target lives here so it's visible/version-able.
+  "vars": {
+    "GITHUB_OWNER": "LazMcSpaz",
+    "GITHUB_REPO": "Audio-Books",
+    "GITHUB_BRANCH": "book-chunks"
   }
 }
