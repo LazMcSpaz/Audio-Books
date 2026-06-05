@@ -64,12 +64,35 @@ export async function ensureBranch({ owner, repo, token, branch }) {
   return baseRef.object.sha;
 }
 
+// Whether chunks/<slug>/ already exists on the branch.
+export async function bookExists({ owner, repo, token, branch }, slug) {
+  try {
+    await gh(token, "GET", `/repos/${owner}/${repo}/contents/chunks/${slug}?ref=${encodeURIComponent(branch)}`);
+    return true;
+  } catch (e) {
+    if (e.status === 404) return false; // path or branch not found
+    throw e;
+  }
+}
+
+// Existing blob paths under a directory prefix on the branch (recursive).
+async function listUnder({ owner, repo, token, branch }, prefix) {
+  const head = await getBranchHead({ owner, repo, token, branch });
+  if (!head) return [];
+  const commit = await gh(token, "GET", `/repos/${owner}/${repo}/git/commits/${head}`);
+  const tree = await gh(token, "GET", `/repos/${owner}/${repo}/git/trees/${commit.tree.sha}?recursive=1`);
+  return (tree.tree || []).filter((t) => t.type === "blob" && t.path.startsWith(prefix)).map((t) => t.path);
+}
+
 /*
  * Commit one book's files to the branch as a single commit.
  *   files: [{ name, text }] — placed under chunks/<slug>/
+ * When overwrite is true, files under chunks/<slug>/ that are NOT in the new set
+ * are deleted in the same commit, so re-running a book that now produces fewer
+ * chunks doesn't leave stragglers behind.
  * Returns { commitSha, htmlUrl }.
  */
-export async function commitBook({ owner, repo, token, branch }, slug, files) {
+export async function commitBook({ owner, repo, token, branch }, slug, files, { overwrite = false } = {}) {
   const parentSha = await ensureBranch({ owner, repo, token, branch });
   const parentCommit = await gh(token, "GET", `/repos/${owner}/${repo}/git/commits/${parentSha}`);
 
@@ -80,13 +103,21 @@ export async function commitBook({ owner, repo, token, branch }, slug, files) {
     content: f.text,
   }));
 
+  if (overwrite) {
+    const prefix = `chunks/${slug}/`;
+    const newPaths = new Set(tree.map((t) => t.path));
+    for (const path of await listUnder({ owner, repo, token, branch }, prefix)) {
+      if (!newPaths.has(path)) tree.push({ path, mode: "100644", type: "blob", sha: null });
+    }
+  }
+
   const newTree = await gh(token, "POST", `/repos/${owner}/${repo}/git/trees`, {
     base_tree: parentCommit.tree.sha,
     tree,
   });
 
   const commit = await gh(token, "POST", `/repos/${owner}/${repo}/git/commits`, {
-    message: `Add Stage 1 chunks for ${slug}`,
+    message: `${overwrite ? "Update" : "Add"} Stage 1 chunks for ${slug}`,
     tree: newTree.sha,
     parents: [parentSha],
   });

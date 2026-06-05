@@ -43,7 +43,8 @@
 
         <ol class="howto__steps">
           <li><strong>Add books.</strong> Drag in (or click to pick) one or many
-              <code>.txt</code>, <code>.epub</code>, or <code>.pdf</code> files. They queue up below.</li>
+              <code>.txt</code>, <code>.epub</code>, or <code>.pdf</code> files. They queue up below.
+              Added something by accident? Tick its checkbox and click <strong>Remove selected</strong>.</li>
           <li><strong>Leave both checkboxes on</strong> unless you have a reason not to:
               <em>Auto-OCR</em> (reads scanned PDFs) and <em>structural breaks</em>.</li>
           <li><strong>To push to the repo (optional):</strong> type the <em>app password</em>
@@ -52,7 +53,9 @@
           <li><strong>Click “Start processing”</strong> and you can walk away. It works through
               the queue one book at a time, OCR'ing scans as needed, and — if connected —
               commits each finished book to the branch as it completes. Keep this tab in the
-              foreground (background tabs get suspended by the browser).</li>
+              foreground (background tabs get suspended by the browser). A book that's
+              <strong>already on the branch</strong> is flagged <em>“already on branch”</em> and
+              <strong>skipped</strong> — tick its <em>Overwrite</em> box if you mean to replace it.</li>
           <li><strong>When it's done:</strong> if you didn't connect, click
               <strong>Download all as ZIP</strong>. If you did, the books are already on the
               <code>book-chunks</code> branch under <code>chunks/&lt;book&gt;/</code>.</li>
@@ -119,6 +122,7 @@
         <button id="startBtn" class="btn btn--primary" disabled>Start processing</button>
         <button id="zipAllBtn" class="btn" hidden>Download all as ZIP</button>
         <button id="pronAllBtn" class="btn" hidden>Download pronunciation (combined .pls)</button>
+        <button id="removeBtn" class="btn" disabled>Remove selected</button>
         <button id="clearBtn" class="btn" disabled>Clear list</button>
       </div>
     </section>

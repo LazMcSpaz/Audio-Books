@@ -12,7 +12,7 @@
 
 import { ingest, fileExtension } from "./ingest.js";
 import { pdfLooksScanned, ocrPdf } from "./ocr.js";
-import { verifyBackend, pushBook } from "./push.js";
+import { verifyBackend, checkBooks, pushBook } from "./push.js";
 import { processBook, buildCombinedPronunciationPls, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
 
 const ACCEPTED = new Set([".txt", ".epub", ".pdf"]);
@@ -41,8 +41,16 @@ function makeBook(file, slug) {
     error: "",
     ocr: { page: 0, total: 0, progress: 0 },
     result: null,
-    push: { state: gh.connected ? "idle" : "off", url: "", error: "" }, // off|idle|pushing|pushed|failed
+    push: { state: gh.connected ? "idle" : "off", url: "", error: "" }, // off|idle|pushing|pushed|skipped|failed
+    selected: false,        // ticked for removal
+    existsOnBranch: false,   // already pushed to the branch previously
+    overwrite: false,        // user opted to replace the existing copy
   };
+}
+
+// A book is mid-flight (can't be removed from the list right now).
+function inFlight(b) {
+  return ["reading", "ocr", "processing"].includes(b.status) || b.push.state === "pushing";
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -144,9 +152,21 @@ function pushCell(b) {
     case "idle": return `<span class="muted small">waiting to push…</span>`;
     case "pushing": return `<span class="bdg bdg--busy">Pushing…</span>`;
     case "pushed": return `<a class="small ok" href="${escapeHtml(b.push.url)}" target="_blank" rel="noreferrer">✓ pushed to branch ↗</a>`;
+    case "skipped": return `<span class="bdg bdg--warn">skipped</span> <span class="muted small">already on branch — tick “Overwrite” to replace</span>`;
     case "failed": return `<span class="bdg bdg--err">push failed</span> <span class="muted small">${escapeHtml(b.push.error)}</span>`;
     default: return "";
   }
+}
+
+// Warning + overwrite opt-in shown when this book is already on the branch and
+// we're connected (and it hasn't been pushed this session yet).
+function existsCell(b) {
+  if (!b.existsOnBranch || !gh.connected) return "";
+  if (b.push.state === "pushed" || b.push.state === "pushing") return "";
+  return `<div class="book-row__exists">
+    <span class="bdg bdg--warn">⚠ already on branch</span>
+    <label class="ovr"><input type="checkbox" class="overwrite-toggle" data-id="${b.id}" ${b.overwrite ? "checked" : ""} /> Overwrite</label>
+  </div>`;
 }
 
 function detailsCell(b) {
@@ -197,10 +217,13 @@ function detailsCell(b) {
 function rowInner(b) {
   return `
     <div class="book-row__head">
+      <input type="checkbox" class="book-select" data-id="${b.id}" ${b.selected ? "checked" : ""}
+             ${inFlight(b) ? "disabled" : ""} aria-label="Select for removal" />
       <span class="book-row__name">${escapeHtml(b.name)}</span>
       <span class="book-row__slug muted small">chunks/${escapeHtml(b.slug)}/</span>
     </div>
     <div class="book-row__status">${statusCell(b)}</div>
+    ${existsCell(b)}
     <div class="book-row__push">${pushCell(b)}</div>
     ${detailsCell(b)}`;
 }
@@ -218,9 +241,6 @@ function renderBatch() {
     <h2>Books <span class="muted">(${doneCount}/${books.length} done)</span></h2>
     <ul class="book-list">${rows}</ul>`;
   panel.hidden = false;
-  panel.querySelectorAll("button[data-zip]").forEach((btn) =>
-    btn.addEventListener("click", () => downloadBookZip(Number(btn.dataset.zip)))
-  );
 }
 
 function updateRow(b) {
@@ -235,11 +255,29 @@ function updateControls() {
   const hasQueued = books.some((b) => b.status === "queued");
   const hasDone = books.some((b) => b.status === "done");
   const hasPron = books.some((b) => b.status === "done" && b.result.pronunciation.length);
+  const hasSelection = books.some((b) => b.selected);
   $("#startBtn").disabled = processing || !hasQueued;
   $("#startBtn").textContent = processing ? "Processing…" : "Start processing";
   $("#zipAllBtn").hidden = !hasDone;
   $("#pronAllBtn").hidden = !hasPron;
+  $("#removeBtn").disabled = processing || !hasSelection;
   $("#clearBtn").disabled = processing || books.length === 0;
+}
+
+// Ask the backend which queued books already exist on the branch, and flag them
+// so the user is warned before overwriting.
+async function checkExisting() {
+  if (!gh.connected) return;
+  const pending = books.filter((b) => b.push.state !== "pushed");
+  if (!pending.length) return;
+  try {
+    const { existing } = await checkBooks(gh.password, pending.map((b) => b.slug));
+    const set = new Set(existing);
+    for (const b of pending) b.existsOnBranch = set.has(b.slug);
+    renderBatch();
+  } catch (err) {
+    console.warn("existence check failed:", err.message);
+  }
 }
 
 // --- GitHub backend connect ------------------------------------------------
@@ -267,6 +305,7 @@ async function connectBackend() {
     // Books already queued should now intend to push.
     for (const b of books) if (b.push.state === "off") b.push.state = "idle";
     renderBatch();
+    checkExisting();
   } catch (err) {
     gh.connected = false;
     gh.password = null;
@@ -293,6 +332,18 @@ function addFiles(fileList) {
   if (added) setStatus("", "info");
   renderBatch();
   updateControls();
+  if (added) checkExisting();
+}
+
+// Remove the ticked books from the queue (can't remove one that's mid-flight).
+function removeSelected() {
+  if (processing) return;
+  const before = books.length;
+  books = books.filter((b) => !(b.selected && !inFlight(b)));
+  if (books.length !== before) {
+    renderBatch();
+    updateControls();
+  }
 }
 
 async function processOne(b) {
@@ -344,21 +395,35 @@ async function processOne(b) {
 }
 
 async function pushOne(b) {
+  // Don't overwrite an existing book unless the user ticked "Overwrite".
+  if (b.existsOnBranch && !b.overwrite) {
+    b.push.state = "skipped";
+    updateRow(b);
+    return;
+  }
   b.push.state = "pushing";
   updateRow(b);
   try {
-    const res = await pushBook(gh.password, b.slug, bookFiles(b.result));
+    const res = await pushBook(gh.password, b.slug, bookFiles(b.result), b.overwrite);
     b.push.state = "pushed";
     b.push.url = res.htmlUrl;
+    b.existsOnBranch = true; // it's on the branch now
   } catch (err) {
-    b.push.state = "failed";
-    b.push.error = err.message;
+    // The Worker also guards: a 409 means it already exists.
+    if (/already exists/i.test(err.message)) {
+      b.existsOnBranch = true;
+      b.push.state = "skipped";
+    } else {
+      b.push.state = "failed";
+      b.push.error = err.message;
+    }
   }
   updateRow(b);
 }
 
 async function startProcessing() {
   if (processing) return;
+  await checkExisting(); // make the "already on branch" warnings current
   processing = true;
   updateControls();
   await acquireWakeLock();
@@ -448,7 +513,31 @@ function wire() {
   $("#startBtn").addEventListener("click", startProcessing);
   $("#zipAllBtn").addEventListener("click", downloadAllZip);
   $("#pronAllBtn").addEventListener("click", downloadAllPronunciation);
+  $("#removeBtn").addEventListener("click", removeSelected);
   $("#clearBtn").addEventListener("click", clearAll);
+
+  // Event delegation on the batch list — survives per-row innerHTML updates.
+  const batch = $("#batch");
+  batch.addEventListener("click", (e) => {
+    const zip = e.target.closest("button[data-zip]");
+    if (zip) downloadBookZip(Number(zip.dataset.zip));
+  });
+  batch.addEventListener("change", (e) => {
+    const t = e.target;
+    const id = Number(t.dataset.id);
+    const b = books.find((x) => x.id === id);
+    if (!b) return;
+    if (t.classList.contains("book-select")) {
+      b.selected = t.checked;
+      updateControls();
+    } else if (t.classList.contains("overwrite-toggle")) {
+      b.overwrite = t.checked;
+      // If it was skipped, allow it to push on the next run / immediate retry.
+      if (b.push.state === "skipped" && b.overwrite && b.status === "done" && !processing) {
+        pushOne(b);
+      }
+    }
+  });
 
   updateControls();
 }

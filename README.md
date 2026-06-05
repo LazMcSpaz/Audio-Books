@@ -57,10 +57,15 @@ each folder's own `README.md`.
 ## Batch workflow
 
 1. **Add books** — drag-drop or pick **multiple** `.txt`/`.epub`/`.pdf` files.
-   They queue up in the list.
+   They queue up in the list. Added one by accident? Tick its checkbox and click
+   **Remove selected** (you can also **Clear list**).
 2. **(Optional) Connect the push backend** — type your app password and click
    **Connect**. Once connected, each finished book is committed to the repo
-   branch automatically. Skip this to keep everything local.
+   branch automatically. Skip this to keep everything local. On connect (and at
+   start) the app asks the backend which books are **already on the branch** and
+   flags them — an existing book is **skipped** rather than silently overwritten,
+   unless you tick its **Overwrite** box. Overwriting does a clean replace
+   (stragglers from a previous, longer chunking are removed in the same commit).
 3. **Leave _Auto-OCR_ on** so scanned PDFs are OCR'd without prompting (required
    for an unattended run).
 4. **Start processing.** The app works through the queue one book at a time,

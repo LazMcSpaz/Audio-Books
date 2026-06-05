@@ -255,11 +255,16 @@ main {
   padding: .7rem .85rem;
   margin-bottom: .6rem;
 }
-.book-row__head { display: flex; justify-content: space-between; gap: .75rem; align-items: baseline; }
+.book-row__head { display: flex; gap: .6rem; align-items: baseline; }
 .book-row__name { font-weight: 600; word-break: break-word; }
-.book-row__slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.book-row__slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-left: auto; }
 .book-row__status { margin-top: .45rem; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .book-row__push { margin-top: .35rem; }
+.book-select { width: 15px; height: 15px; accent-color: var(--accent-2); flex: 0 0 auto; align-self: center; cursor: pointer; }
+.book-select:disabled { opacity: .4; cursor: default; }
+.book-row__exists { margin-top: .4rem; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.book-row__exists .ovr { font-size: .82rem; display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; }
+.book-row__exists .ovr input { width: 14px; height: 14px; accent-color: var(--over); }
 
 /* Status badges */
 .bdg {
@@ -274,6 +279,7 @@ main {
 .bdg--busy { color: var(--accent); border-color: var(--accent); }
 .bdg--ok { color: var(--ok); border-color: var(--ok); }
 .bdg--err { color: var(--over); border-color: var(--over); }
+.bdg--warn { color: #f0b34a; border-color: #f0b34a; }
 
 /* Per-row OCR progress bar */
 .rowbar { flex: 1; min-width: 120px; height: 6px; background: var(--panel); border-radius: 999px; overflow: hidden; }

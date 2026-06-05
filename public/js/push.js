@@ -31,7 +31,13 @@ export function verifyBackend(password) {
   return postJson("/api/verify", password, {});
 }
 
-// Commit one book's files. files: [{ name, text }]. Returns { commitSha, htmlUrl }.
-export function pushBook(password, slug, files) {
-  return postJson("/api/push", password, { slug, files });
+// Of the given slugs, which already exist on the branch. Returns { existing }.
+export function checkBooks(password, slugs) {
+  return postJson("/api/check", password, { slugs });
+}
+
+// Commit one book's files. files: [{ name, text }]. Pass overwrite=true to
+// replace an existing book (and clean up stragglers). Returns { commitSha, htmlUrl }.
+export function pushBook(password, slug, files, overwrite = false) {
+  return postJson("/api/push", password, { slug, files, overwrite });
 }

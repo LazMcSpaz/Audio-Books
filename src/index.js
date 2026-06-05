@@ -5,15 +5,17 @@
  * platform; this script only runs for requests that don't match an asset —
  * namely the /api/* routes below. Everything else falls through to ASSETS.
  *
- * Endpoints (both require the X-App-Password header to match APP_PASSWORD):
+ * Endpoints (all require the X-App-Password header to match APP_PASSWORD):
  *   POST /api/verify  -> { ok, owner, repo, branch }  (checks password + token)
- *   POST /api/push    -> { commitSha, htmlUrl }        (commits one book)
+ *   POST /api/check   -> { ok, existing: [slug...] }   (which books are on branch)
+ *   POST /api/push    -> { commitSha, htmlUrl }        (commits one book; 409 if
+ *                        it already exists and overwrite isn't set)
  *
  * The GitHub token (GITHUB_TOKEN secret) is used only here, server-side; the
  * browser never sees it.
  */
 
-import { getRepo, commitBook } from "./github.js";
+import { getRepo, commitBook, bookExists } from "./github.js";
 
 const MAX_FILES = 2000;
 // Chunks are ~4.5k chars; the aux files (_REVIEW_FLAGS.txt, _PRONUNCIATION.pls)
@@ -70,6 +72,29 @@ async function handleVerify(request, env) {
   return json({ ok: true, owner: cfg.owner, repo: cfg.repo, branch: cfg.branch });
 }
 
+// Report which of the given slugs already exist on the branch, so the app can
+// warn before overwriting.
+async function handleCheck(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+  const { slugs } = payload || {};
+  if (!Array.isArray(slugs) || slugs.length > MAX_FILES) {
+    return json({ ok: false, error: "Invalid slug list." }, 400);
+  }
+  const cfg = repoConfig(env);
+  const existing = [];
+  for (const slug of slugs) {
+    if (typeof slug === "string" && SLUG_RE.test(slug) && (await bookExists(cfg, slug))) {
+      existing.push(slug);
+    }
+  }
+  return json({ ok: true, existing });
+}
+
 async function handlePush(request, env) {
   let payload;
   try {
@@ -77,7 +102,7 @@ async function handlePush(request, env) {
   } catch {
     return json({ ok: false, error: "Invalid JSON body." }, 400);
   }
-  const { slug, files } = payload || {};
+  const { slug, files, overwrite } = payload || {};
 
   if (typeof slug !== "string" || !SLUG_RE.test(slug)) {
     return json({ ok: false, error: "Invalid book slug." }, 400);
@@ -97,7 +122,13 @@ async function handlePush(request, env) {
     }
   }
 
-  const result = await commitBook(repoConfig(env), slug, files);
+  const cfg = repoConfig(env);
+  // Don't silently overwrite an existing book unless the caller opts in.
+  if (!overwrite && (await bookExists(cfg, slug))) {
+    return json({ ok: false, exists: true, error: `"${slug}" already exists on the branch.` }, 409);
+  }
+
+  const result = await commitBook(cfg, slug, files, { overwrite: !!overwrite });
   return json({ ok: true, ...result });
 }
 
@@ -124,6 +155,7 @@ export default {
 
     try {
       if (url.pathname === "/api/verify") return await handleVerify(request, env);
+      if (url.pathname === "/api/check") return await handleCheck(request, env);
       if (url.pathname === "/api/push") return await handlePush(request, env);
       return json({ ok: false, error: "Not found." }, 404);
     } catch (err) {
