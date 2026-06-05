@@ -33,6 +33,54 @@
   </header>
 
   <main>
+    <details class="panel howto" id="howto">
+      <summary><strong>How to use this</strong> — click to expand (read me if it's been a while)</summary>
+      <div class="howto__body">
+        <p>This is <strong>Stage 1</strong> of prepping public-domain books for ElevenLabs.
+           It cleans the text, splits it into narration-sized chunks, lists likely
+           mispronunciations, and adds a few structural pauses — then either hands you a
+           ZIP or commits the results to the <code>book-chunks</code> branch of the repo.</p>
+
+        <ol class="howto__steps">
+          <li><strong>Add books.</strong> Drag in (or click to pick) one or many
+              <code>.txt</code>, <code>.epub</code>, or <code>.pdf</code> files. They queue up below.</li>
+          <li><strong>Leave both checkboxes on</strong> unless you have a reason not to:
+              <em>Auto-OCR</em> (reads scanned PDFs) and <em>structural breaks</em>.</li>
+          <li><strong>To push to the repo (optional):</strong> type the <em>app password</em>
+              and click <strong>Connect</strong>. Skip this to just download a ZIP instead.
+              <span class="muted">(The password is the <code>APP_PASSWORD</code> secret set on the Cloudflare Worker.)</span></li>
+          <li><strong>Click “Start processing”</strong> and you can walk away. It works through
+              the queue one book at a time, OCR'ing scans as needed, and — if connected —
+              commits each finished book to the branch as it completes. Keep this tab in the
+              foreground (background tabs get suspended by the browser).</li>
+          <li><strong>When it's done:</strong> if you didn't connect, click
+              <strong>Download all as ZIP</strong>. If you did, the books are already on the
+              <code>book-chunks</code> branch under <code>chunks/&lt;book&gt;/</code>.</li>
+        </ol>
+
+        <p><strong>What each book produces</strong> (in its <code>chunks/&lt;book&gt;/</code> folder):</p>
+        <ul class="howto__files">
+          <li><code>ch001_part01.txt …</code> — the chunked text to narrate, in order.</li>
+          <li><code>_PRONUNCIATION.tsv</code> — names/terms a voice may mispronounce, most-frequent
+              first. Open it, fill the <em>alias</em> column with a plain phonetic respelling
+              (e.g. <code>Qabalah → Kah-BAH-lah</code>), and load those as <strong>alias</strong>
+              rules in ElevenLabs. <span class="muted">Plain respellings, <em>not</em> IPA — IPA/phoneme
+              rules only work on the V2-flash model and are ignored elsewhere.</span></li>
+          <li><code>_REVIEW_FLAGS.txt</code> — ambiguous bits the script wouldn't guess on
+              (St. = Saint/Street?, times, ordinals…), for the Stage 2 review.</li>
+        </ul>
+
+        <p><strong>Then what?</strong> Stage 2 is a Claude Code pass: ask it to
+           <em>“review the <code>book-chunks</code> branch”</em> — it resolves the review flags,
+           adds expressive pauses, and writes the finished <code>final/&lt;book&gt;/</code> chunks
+           you actually narrate in ElevenLabs.</p>
+
+        <p class="muted small">Privacy: all text processing and OCR happen in your browser. Nothing
+           is uploaded unless you connect and push — and then only the finished chunk text goes to
+           your own Worker. No data is stored; reloading the page clears everything.</p>
+      </div>
+    </details>
+
     <section id="dropzone" class="dropzone" tabindex="0" role="button"
              aria-label="Add .txt, .epub, or .pdf books">
       <div class="dropzone__inner">
@@ -50,6 +98,10 @@
       <label class="ctl-row">
         <input type="checkbox" id="autoOcr" checked />
         <span>Auto-OCR scanned PDFs (needed for unattended batches)</span>
+      </label>
+      <label class="ctl-row">
+        <input type="checkbox" id="insertBreaks" checked />
+        <span>Insert structural <code>&lt;break&gt;</code> tags (after chapter titles &amp; at scene dividers). Turn off if a title sounds better without.</span>
       </label>
 
       <div class="ctl-row ctl-row--gh">

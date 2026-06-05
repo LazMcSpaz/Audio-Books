@@ -25,6 +25,7 @@ const num = (n) => n.toLocaleString("en-US");
 let books = [];           // see makeBook()
 let processing = false;
 let autoOcr = true;
+let insertBreaks = true;  // structural <break> tags (mirrors prep_book.py --no-breaks)
 let wakeLock = null;
 let nextId = 1;
 
@@ -85,10 +86,11 @@ function setStatus(msg, kind = "info") {
   el.hidden = !msg;
 }
 
-// Chunk files + the per-book review flags file, ready for ZIP/push.
+// Chunk files + the per-book review flags & pronunciation files, ready for ZIP/push.
 function bookFiles(result) {
   const files = result.files.map((f) => ({ name: f.name, text: f.text }));
   files.push({ name: "_REVIEW_FLAGS.txt", text: result.reviewFlagsText });
+  files.push({ name: "_PRONUNCIATION.tsv", text: result.pronunciationTsv });
   return files;
 }
 
@@ -129,7 +131,7 @@ function statusCell(b) {
     case "done": {
       const r = b.result;
       return `<span class="bdg bdg--ok">✓ ${num(r.chunkCount)} chunks</span>
-        <span class="muted small">${num(r.totalChars)} chars · ${r.flags.length} flags · ~${estimateAudioHours(r.totalChars).toFixed(1)}h</span>`;
+        <span class="muted small">${num(r.totalChars)} chars · ${num(r.pronunciationCount)} pron · ${r.breakCount} breaks · ${r.flags.length} flags · ~${estimateAudioHours(r.totalChars).toFixed(1)}h</span>`;
     }
     default: return "";
   }
@@ -167,13 +169,27 @@ function detailsCell(b) {
           <ul>${items.map((it) => `<li><code>${escapeHtml(it.snippet)}</code></li>`).join("")}</ul></details>`)
       .join("");
   }
+  // Pronunciation preview: top terms by frequency (full list is in the .tsv).
+  let pronHtml = `<p class="ok small">No pronunciation candidates found.</p>`;
+  if (r.pronunciation.length) {
+    const top = r.pronunciation.slice(0, 25);
+    const rows = top
+      .map((c) => `<li><code>${escapeHtml(c.term)}</code> <span class="muted">×${num(c.count)}</span></li>`)
+      .join("");
+    const more = r.pronunciation.length > top.length
+      ? `<li class="muted">…and ${num(r.pronunciation.length - top.length)} more in <code>_PRONUNCIATION.tsv</code></li>`
+      : "";
+    pronHtml = `<p class="small muted">Fill in aliases in <code>_PRONUNCIATION.tsv</code> (plain respellings, not IPA).</p>
+      <ul class="file-list">${rows}${more}</ul>`;
+  }
   return `
     <details class="book-details">
-      <summary>Files (${r.files.length}) &amp; review flags (${r.flags.length})</summary>
+      <summary>Files (${r.files.length}) · ${num(r.pronunciationCount)} pronunciation · ${r.breakCount} breaks · ${r.flags.length} flags</summary>
       <div class="book-details__body">
         <button class="btn btn--sm" data-zip="${b.id}">Download this book as ZIP</button>
         <h4>Chunks</h4><ul class="file-list">${fileList}</ul>
-        <h4>Review flags</h4>${flagsHtml}
+        <h4>Pronunciation candidates (${num(r.pronunciationCount)})</h4>${pronHtml}
+        <h4>Review flags (${r.flags.length})</h4>${flagsHtml}
       </div>
     </details>`;
 }
@@ -306,9 +322,15 @@ async function processOne(b) {
     b.status = "processing";
     updateRow(b);
     await new Promise((r) => setTimeout(r, 0)); // let the row paint
-    b.result = processBook(text, DEFAULT_MAX_CHARS);
+    b.result = processBook(text, DEFAULT_MAX_CHARS, { insertBreaks });
     b.status = "done";
     updateRow(b);
+    const r = b.result;
+    console.info(
+      `[${b.name}] ${r.chunkCount} chunks, ${r.totalChars} chars · ` +
+        `${r.pronunciationCount} pronunciation candidates (_PRONUNCIATION.tsv) · ` +
+        `${r.breakCount} structural breaks · ${r.flags.length} review flags`
+    );
 
     if (gh.connected) await pushOne(b);
   } catch (err) {
@@ -409,6 +431,7 @@ function wire() {
   });
 
   $("#autoOcr").addEventListener("change", (e) => { autoOcr = e.target.checked; });
+  $("#insertBreaks").addEventListener("change", (e) => { insertBreaks = e.target.checked; });
   $("#connectBtn").addEventListener("click", connectBackend);
   $("#appPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") connectBackend(); });
   $("#startBtn").addEventListener("click", startProcessing);

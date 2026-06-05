@@ -16,9 +16,11 @@
 import { getRepo, commitBook } from "./github.js";
 
 const MAX_FILES = 2000;
-const MAX_FILE_CHARS = 60000; // generous headroom over the 4,500-char chunks
+// Chunks are ~4.5k chars; the aux files (_REVIEW_FLAGS.txt, _PRONUNCIATION.tsv)
+// can be much larger on a big book, so allow generous headroom.
+const MAX_FILE_CHARS = 1000000;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
-const FILENAME_RE = /^(ch\d{3}_part\d{2}\.txt|_REVIEW_FLAGS\.txt)$/;
+const FILENAME_RE = /^(ch\d{3}_part\d{2}\.txt|_REVIEW_FLAGS\.txt|_PRONUNCIATION\.tsv)$/;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {

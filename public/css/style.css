@@ -213,6 +213,18 @@ main {
 }
 .footer code { color: var(--accent); }
 
+/* How-to guide */
+.howto > summary { cursor: pointer; font-size: 1rem; padding: .2rem 0; list-style: revert; }
+.howto > summary::marker { color: var(--accent); }
+.howto__body { padding-top: .6rem; line-height: 1.55; }
+.howto__body p { margin: .6rem 0; }
+.howto__steps { margin: .4rem 0 .8rem; padding-left: 1.3rem; }
+.howto__steps li { margin: .35rem 0; }
+.howto__files { margin: .4rem 0 .8rem; padding-left: 1.3rem; list-style: none; }
+.howto__files li { margin: .4rem 0; padding-left: .2rem; }
+.howto__files code, .howto__steps code, .howto__body > p code { color: var(--accent); }
+.btn--sm { font-size: .8rem; padding: .35rem .7rem; }
+
 /* Controls panel */
 .controls { display: flex; flex-direction: column; gap: .9rem; }
 .ctl-row { display: flex; align-items: center; gap: .5rem; font-size: .92rem; }

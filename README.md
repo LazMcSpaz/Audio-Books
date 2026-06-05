@@ -97,10 +97,61 @@ each folder's own `README.md`.
 3. **Detect chapters** via headings like `CHAPTER I`, `CHAPTER 1`,
    `Chapter One`, bare roman numerals, or bare numbered headings on their own
    line (optional trailing period).
-4. **Chunk** each chapter into blocks under **4,500 characters** (ElevenLabs'
+4. **Extract pronunciation candidates** → `_PRONUNCIATION.tsv` (see below).
+5. **Insert structural `<break>` tags** at chapter/scene boundaries (see below).
+6. **Chunk** each chapter into blocks under **4,500 characters** (ElevenLabs'
    hard per-paragraph limit is 5,000; the headroom is for the pause tags Stage 2
    adds). Breaks happen only at paragraph boundaries; a single oversized
-   paragraph is split at sentence boundaries — **never mid-sentence**.
+   paragraph is split at sentence boundaries — **never mid-sentence**. Any
+   structural break tags ride along inside the chunk text and count toward the
+   4,500-char budget.
+
+### Pronunciation extraction (`_PRONUNCIATION.tsv`)
+
+A pass over the cleaned text collects every term a TTS voice is likely to
+mispronounce, so a human can supply corrected pronunciations before narration.
+A term is a candidate if it is any of:
+
+- **Capitalized but not sentence-initial** — i.e. a proper noun (name, place).
+  Words that only ever start a sentence are skipped (can't tell them from
+  ordinary capitalization).
+- **All-caps** (excluding the same structural words the flags logic skips —
+  CHAPTER, BOOK, PART, …).
+- **Containing letter patterns rare in English** — non-ASCII/diacritics, `q`
+  not followed by `u`, doubled `aa/ii/uu`, transliteration digraphs, etc. —
+  which catches foreign / esoteric / technical terms.
+- *(A "not in a dictionary" sub-check exists in the Python reference but is
+  **skipped in the browser** — there's no system wordlist, and per the spec we
+  skip rather than bundle a heavy dictionary.)*
+
+Output is a TAB-separated file: `term`, `count` (frequency in the book), a blank
+`alias` column for the human to fill with a **plain phonetic respelling**
+(e.g. `Qabalah → Kah-BAH-lah`), and a blank `notes` column. **Sorted by
+frequency descending** so the high-impact names (a name said 200 times) are
+triaged first. Deduplicated but **case-sensitive** — `Word` and `word` are
+separate rows, because ElevenLabs alias rules are case-sensitive.
+
+The file header reminds you these become **alias rules** in ElevenLabs (which
+work on **all** models), **not phoneme rules** (which only work on
+`eleven_flash_v2` and are silently ignored on V3 and others) — so fill in plain
+respellings, **not IPA**.
+
+### Structural pause insertion (`<break>` tags)
+
+Conservative, mechanical pauses only — the guiding rule is **under-tag rather
+than over-tag** (too many/too-long breaks destabilize ElevenLabs). It inserts:
+
+- `<break time="1.5s" />` after a **chapter title**, before the body begins.
+- `<break time="1.0s" />` at an explicit **scene divider** — a short line of
+  only divider symbols (`***`, `* * *`, `---`, …).
+- **Nothing** at ordinary paragraph breaks. (A bare blank-line gap can't be
+  distinguished from a paragraph break — mechanical cleanup already normalized
+  gap sizes — so tagging them would be exactly the over-tagging to avoid.)
+
+No dramatic / emphasis / sentence-level pauses — those need human judgment and
+are added in the Stage 2 review. Toggle the whole pass off with the **"Insert
+structural `<break>` tags"** checkbox (the web-app equivalent of the Python
+`--no-breaks` flag); default on.
 
 ### Ambiguities it will NOT auto-fix (flagged for review)
 
@@ -118,9 +169,18 @@ These are collected into `_REVIEW_FLAGS.txt` with context, never changed:
 
 ## Output
 
-- `ch001_part01.txt`, `ch002_part01.txt`, … — one file per chunk.
+Per book, under `chunks/<book>/`:
+
+- `ch001_part01.txt`, `ch002_part01.txt`, … — one file per chunk (with any
+  structural `<break>` tags inline).
+- `_PRONUNCIATION.tsv` — candidate mispronunciations, frequency-sorted, with
+  blank `alias`/`notes` columns for you to fill in (alias rules, not IPA).
 - `_REVIEW_FLAGS.txt` — every flagged item with a context snippet.
-- **Download all as ZIP** bundles all of the above.
+
+The app pushes these to the `book-chunks` branch (when connected), and
+**Download all / per-book ZIP** bundles the same files. The per-book row shows
+chunk / pronunciation-candidate / break / flag counts; the browser console logs
+the same summary per book.
 
 ---
 

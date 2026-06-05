@@ -160,6 +160,103 @@ export function collectFlags(text) {
 }
 
 // ---------------------------------------------------------------------------
+// PRONUNCIATION EXTRACTION — candidate terms a TTS voice may mispronounce
+// ---------------------------------------------------------------------------
+
+/*
+ * Letter patterns that are rare in ordinary English and tend to mark
+ * foreign / esoteric / technical terms. Deliberately broad — recall matters
+ * more than precision here, because the human triages the list by frequency.
+ * Easy to extend: just add a regex.
+ */
+const RARE_LETTER_PATTERNS = [
+  /[^\x00-\x7F]/,        // any non-ASCII letter (diacritics, non-Latin scripts)
+  /aa|ii|uu/i,           // double vowels uncommon in English
+  /q(?!u)/i,             // q not followed by u (Qabalah, Iraq, qi)
+  /yph/i,                // glyph-like clusters
+  /(kh|zh|tz|cz|sz)/i,   // transliteration digraphs (Khan, Zhukov, Mirza)
+  /[wxz]{2,}/i,          // doubled rare consonants
+];
+
+// A token is sentence-initial if the nearest non-space, non-opening-punctuation
+// character before it is a sentence terminator, a newline, or the start of the
+// text. Lets us tell proper nouns from ordinary words that merely open a sentence.
+function isSentenceInitial(text, idx) {
+  let i = idx - 1;
+  while (i >= 0) {
+    const c = text[i];
+    if (c === " " || c === "\t" || c === '"' || c === "'" || c === "’" ||
+        c === "(" || c === "[" || c === "*" || c === "_") { i--; continue; }
+    break;
+  }
+  if (i < 0) return true;
+  const c = text[i];
+  return c === "\n" || c === "." || c === "!" || c === "?";
+}
+
+const PRON_ALLCAPS = /^[A-Z]{2,}$/;
+
+function isPronunciationCandidate(term, hasNonInitial) {
+  // (2) all-caps tokens, excluding the structural words the flags logic skips.
+  if (PRON_ALLCAPS.test(term) && !ALLCAPS_SKIP.has(term)) return true;
+  // (3) rare-in-English letter patterns / non-ASCII letters.
+  if (RARE_LETTER_PATTERNS.some((re) => re.test(term))) return true;
+  // (1) capitalized but appearing somewhere NOT at a sentence start -> proper
+  //     noun (name, place). Skips all-caps (handled above) and words that only
+  //     ever open a sentence (can't tell those from ordinary capitalization).
+  const startsUpper = /^\p{Lu}/u.test(term);
+  const hasLower = /\p{Ll}/u.test(term);
+  if (startsUpper && hasLower && !PRON_ALLCAPS.test(term) && hasNonInitial) return true;
+  // (4) not-in-wordlist check: intentionally skipped in the browser. There is no
+  //     system wordlist here, and per spec we skip the sub-check rather than ship
+  //     a heavy bundled dictionary. (The Python reference does run this check.)
+  return false;
+}
+
+/*
+ * Scan cleaned text and return candidate terms sorted by frequency (desc).
+ * Returns [{ term, count }]. Case-preserving and case-SENSITIVE — "Word" and
+ * "word" are distinct rows, because ElevenLabs alias rules are case-sensitive.
+ */
+export function extractPronunciation(text) {
+  const tokenRe = /\p{L}[\p{L}'’]*/gu;
+  const terms = new Map(); // term -> { count, hasNonInitial }
+  let m;
+  while ((m = tokenRe.exec(text)) !== null) {
+    const term = m[0].replace(/^['’]+|['’]+$/g, "");
+    if (!term) continue;
+    let rec = terms.get(term);
+    if (!rec) { rec = { count: 0, hasNonInitial: false }; terms.set(term, rec); }
+    rec.count++;
+    if (!isSentenceInitial(text, m.index)) rec.hasNonInitial = true;
+  }
+  const out = [];
+  for (const [term, rec] of terms) {
+    if (isPronunciationCandidate(term, rec.hasNonInitial)) out.push({ term, count: rec.count });
+  }
+  out.sort((a, b) => b.count - a.count || a.term.localeCompare(b.term));
+  return out;
+}
+
+export function buildPronunciationTsv(candidates) {
+  const header = [
+    "# _PRONUNCIATION.tsv — terms a text-to-speech voice may mispronounce.",
+    "# Fill the 'alias' column with a plain phonetic RESPELLING, e.g.",
+    "#   Qabalah  ->  Kah-BAH-lah",
+    "# In ElevenLabs these become ALIAS rules, which work on ALL models.",
+    "# Do NOT put IPA / phonemes here: phoneme rules only apply to",
+    "# eleven_flash_v2 and are silently IGNORED on V3 and other models.",
+    "# Sorted by frequency (most-spoken first) so you can triage the",
+    "# high-impact names first. Case-sensitive: 'Word' and 'word' are separate.",
+    "# Tab-separated; leave 'alias'/'notes' blank to fill in.",
+    "#",
+    "term\tcount\talias\tnotes",
+  ].join("\n");
+  const rows = candidates.map((c) => `${c.term}\t${c.count}\t\t`).join("\n");
+  return `${header}\n${rows}\n`;
+}
+
+// ---------------------------------------------------------------------------
 // CHAPTER DETECTION + CHUNKING
 // ---------------------------------------------------------------------------
 
@@ -220,6 +317,62 @@ export function chunkChapter(body, maxChars) {
 }
 
 // ---------------------------------------------------------------------------
+// STRUCTURAL PAUSES — conservative <break> tags at unambiguous boundaries only
+// ---------------------------------------------------------------------------
+
+// Guiding principle (do not violate): UNDER-tag rather than over-tag. Too many
+// breaks, or long ones, destabilize ElevenLabs and sound worse than none. So we
+// emit a pause only where the structure is mechanically certain: after a chapter
+// heading, and at an explicit scene-divider line. Ordinary paragraph breaks get
+// NOTHING — the model paces those from the text itself.
+const CHAPTER_BREAK = '<break time="1.5s" />';
+const SCENE_BREAK = '<break time="1.0s" />';
+
+// A scene divider is a short line of only divider symbols (e.g. "***", "* * *",
+// "---"). A bare blank-line gap is NOT treated as a divider: applyMechanicalFixes
+// already collapsed large gaps to a single blank line, making them
+// indistinguishable from ordinary paragraph breaks — tagging them would be
+// exactly the over-tagging we must avoid.
+function isSceneDivider(par) {
+  const t = par.trim();
+  if (t.length === 0 || t.length > 40) return false;
+  if (!/^[\s*#~·•=_\-—–]+$/.test(t)) return false;
+  return t.replace(/\s/g, "").length >= 3;
+}
+
+/*
+ * Insert structural break tags into one chapter body (which begins with its
+ * title line). Returns { body, breaks }. A no-op when `enabled` is false.
+ */
+export function insertStructuralBreaks(body, title, enabled) {
+  if (!enabled) return { body, breaks: 0 };
+  let breaks = 0;
+  const paras = body.split(/\n\s*\n/);
+
+  // 1) After the chapter title, before the body — but only when the body really
+  //    starts with the title line (skips the synthetic single "Book" chapter,
+  //    whose body has no heading line).
+  if (paras.length && title) {
+    const lines = paras[0].split("\n");
+    if (lines[0].trim() === title.trim()) {
+      lines.splice(1, 0, CHAPTER_BREAK);
+      paras[0] = lines.join("\n");
+      breaks++;
+    }
+  }
+
+  // 2) Replace explicit scene-divider lines with a scene break.
+  for (let i = 0; i < paras.length; i++) {
+    if (isSceneDivider(paras[i])) {
+      paras[i] = SCENE_BREAK;
+      breaks++;
+    }
+  }
+
+  return { body: paras.join("\n\n"), breaks };
+}
+
+// ---------------------------------------------------------------------------
 // ORCHESTRATION
 // ---------------------------------------------------------------------------
 
@@ -230,18 +383,28 @@ function pad(n, width) {
 /*
  * Run the full pipeline on raw ingested text. Returns:
  *   { files: [{name, title, text, chars}], flags, chapters, totalChars,
- *     reviewFlagsText }
+ *     reviewFlagsText, pronunciation, pronunciationTsv, pronunciationCount,
+ *     breakCount, chapterCount, chunkCount }
+ *
+ * options.insertBreaks (default true) toggles structural <break> insertion.
  */
-export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS) {
+export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS, options = {}) {
+  const { insertBreaks = true } = options;
   const stripped = stripGutenberg(rawText);
   const cleaned = applyMechanicalFixes(stripped);
   const flags = collectFlags(cleaned);
+  // Pronunciation scan runs on the cleaned text, before any break tags are added.
+  const pronunciation = extractPronunciation(cleaned);
+  const pronunciationTsv = buildPronunciationTsv(pronunciation);
   const chapters = splitIntoChapters(cleaned);
 
   const files = [];
+  let breakCount = 0;
   chapters.forEach((ch, ci) => {
     const chNum = ci + 1;
-    const parts = chunkChapter(ch.body, maxChars);
+    const { body, breaks } = insertStructuralBreaks(ch.body, ch.title, insertBreaks);
+    breakCount += breaks;
+    const parts = chunkChapter(body, maxChars);
     parts.forEach((chunk, pi) => {
       const name = `ch${pad(chNum, 3)}_part${pad(pi + 1, 2)}.txt`;
       files.push({ name, title: ch.title, text: chunk, chars: chunk.length });
@@ -257,6 +420,10 @@ export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS) {
     chapters,
     totalChars,
     reviewFlagsText,
+    pronunciation,
+    pronunciationTsv,
+    pronunciationCount: pronunciation.length,
+    breakCount,
     chapterCount: chapters.length,
     chunkCount: files.length,
   };
