@@ -35,8 +35,45 @@ export function stripGutenberg(text) {
 }
 
 // ---------------------------------------------------------------------------
-// MECHANICAL FIXES — safe substitutions that read better aloud
+// BOILERPLATE REMOVAL — Global Grey editions
 // ---------------------------------------------------------------------------
+// Global Grey (globalgreyebooks.com) wraps each title in a publisher header
+// (title/author, "published by Global Grey", a download URL), a table of
+// contents, and a back-matter promo footer ("I'm Julie, the woman who runs
+// Global Grey ..."). None of that is Gutenberg-marked, so it survives the
+// stripper above. This removes it — but only when the text is recognizably a
+// Global Grey edition, so ordinary books are left untouched.
+
+export function stripGlobalGrey(text) {
+  if (!/global\s*grey|globalgreyebooks\.com/i.test(text)) return text;
+
+  // Back matter: the promo footer. Try the precise "THE END + asterisk divider
+  // + I'm Julie" shape first, then progressively looser fallbacks.
+  const backPatterns = [
+    /\s*\bTHE END\b[ \t]*\n[ \t]*\*{3,}[ \t]*\n[ \t]*I['’]m Julie\b[\s\S]*$/i,
+    /\n[ \t]*\*{3,}[ \t]*\n[\s\S]*?(?:I['’]m Julie|runs Global Grey|globalgreyebooks\.com)[\s\S]*$/i,
+    /\n[^\n]*\bI['’]m Julie\b[\s\S]*$/i,
+  ];
+  for (const re of backPatterns) {
+    if (re.test(text)) { text = text.replace(re, ""); break; }
+  }
+
+  // Front matter: drop leading paragraph blocks that are the publisher header,
+  // then a "Contents" heading plus the table-of-contents block after it.
+  const paras = text.split(/\n\s*\n/);
+  while (paras.length &&
+         /global\s*grey|globalgreyebooks\.com|^first published in\b/i.test(paras[0].trim())) {
+    paras.shift();
+  }
+  const ci = paras.findIndex((p) => /^contents$/i.test(p.trim()));
+  if (ci !== -1 && ci <= 2) {
+    // "Contents" may be its own block (then the TOC is the next block) or share
+    // a block with the TOC list. Remove accordingly.
+    paras.splice(ci, /\n/.test(paras[ci].trim()) ? 1 : 2);
+  }
+
+  return paras.join("\n\n").trim();
+}
 
 // Titles that are virtually always followed by a capitalized name — these are
 // NEVER sentence-ends, so we expand them without adding a period.
@@ -299,17 +336,47 @@ export function buildCombinedPronunciationTsv(books) {
 // CHAPTER DETECTION + CHUNKING
 // ---------------------------------------------------------------------------
 
-// "CHAPTER I", "CHAPTER 1", "Chapter One", bare roman numerals, or bare numbered
-// headings on their own line, with an optional trailing period.
-const CHAPTER_RE = /^[ \t]*(chapter\s+[\dIVXLC]+\.?|chapter\s+\w+\.?|[IVXLC]+\.|\d+\.)[ \t]*$/gim;
+// A Title-Cased word: a capital, then (for 2+ letter words) a lowercase tail.
+// This is what separates a real heading title ("The Instincts") from an
+// enumerated list item ("All ideas connected ...", "SHOULD an individual ...").
+const TITLE_WORD = "[A-Z](?:[a-z][A-Za-z'’-]*)?";
+const TITLE = `${TITLE_WORD}(?:[,;:]?\\s+${TITLE_WORD})*`;
+
+/*
+ * A heading occupies the rest of its line. We accept:
+ *   - "Chapter X" / "Book X" / "Part X" (+ optional title),
+ *   - a Roman or decimal numeral followed by a Title-Cased title on the SAME
+ *     line — e.g. "VII. The Instincts" (what Stage 1 used to miss),
+ *   - a bare Roman / decimal numeral (e.g. "I.", "12."),
+ *   - named front/back-matter sections (Foreword, Introduction, Conclusion …).
+ *
+ * The leading anchor allows a heading at the start of a line OR right after a
+ * sentence end, so headings glued onto the previous paragraph are still found.
+ * The Title-Case requirement plus the end-of-line lookahead is what keeps
+ * enumerated list items ("I. SHOULD an individual …") from being mistaken for
+ * chapter headings.
+ */
+const HEADING_RE = new RegExp(
+  "(?:^|(?<=[.!?:’\"]\\s))" +
+  "(" +
+    `(?:chapter|book|part|volume|section)\\s+(?:[\\dIVXLCM]+|${TITLE_WORD})(?:[.:])?(?:\\s+${TITLE})?` +
+    "|(?:foreword|preface|prologue|introduction|epilogue|conclusion|afterword)" +
+    `|[IVXLCM]+\\.\\s+${TITLE}` +
+    `|\\d+\\.\\s+${TITLE}` +
+    "|[IVXLCM]+\\." +
+    "|\\d+\\." +
+  ")" +
+  "[ \\t]*(?=\\n|$)",
+  "gim"
+);
 
 export function splitIntoChapters(text) {
   const matches = [];
   let m;
-  CHAPTER_RE.lastIndex = 0;
-  while ((m = CHAPTER_RE.exec(text)) !== null) {
-    matches.push({ title: m[0].trim(), start: m.index });
-    if (m.index === CHAPTER_RE.lastIndex) CHAPTER_RE.lastIndex++;
+  HEADING_RE.lastIndex = 0;
+  while ((m = HEADING_RE.exec(text)) !== null) {
+    matches.push({ title: m[1].trim(), start: m.index });
+    if (m.index === HEADING_RE.lastIndex) HEADING_RE.lastIndex++;
   }
   if (matches.length === 0) {
     return [{ title: "Book", body: text }];
@@ -430,7 +497,10 @@ function pad(n, width) {
 export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS, options = {}) {
   const { insertBreaks = true } = options;
   const stripped = stripGutenberg(rawText);
-  const cleaned = applyMechanicalFixes(stripped);
+  // Strip Global Grey boilerplate after mechanical fixes so the publisher
+  // header, table of contents, and promo footer never reach flag/pronunciation
+  // collection or chunking.
+  const cleaned = stripGlobalGrey(applyMechanicalFixes(stripped));
   const flags = collectFlags(cleaned);
   // Pronunciation scan runs on the cleaned text, before any break tags are added.
   const pronunciation = extractPronunciation(cleaned);
