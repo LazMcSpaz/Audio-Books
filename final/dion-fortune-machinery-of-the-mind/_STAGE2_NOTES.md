@@ -13,25 +13,24 @@ was the judgment-level cleanup only, applied in place over Stage 1's chunks:
   given a trailing period). The chapter `<break>` from Stage 1 is preserved.
 - **All-caps resolved** (none are acronyms):
   - drop-cap opening words (`WHEN`, `THOSE`, `MUCH`, `IT`, `SHOULD`, …) →
-    sentence case (`When`, `Those`, …);
+    sentence case;
   - in-text defining terms (`DENDRITE`, `AXON`, `SUBLIMATION`, `TRANSFERENCE`, …)
     → lowercase, so they're read as words rather than letter-by-letter.
-- **Enumerated Roman list markers** (`I. … II. … III. … IV.`) in the Complexes
-  and Reproductive-Instinct chapters → spoken ordinals (`First, … Second, …`).
-  (One marker that the chunker split across the ch008 part01/part02 boundary was
-  rejoined correctly.)
+- **Enumerated Roman list markers** (`I. … II. … III. … IV.`) → spoken ordinals
+  (`First, … Second, …`). One marker the chunker split across the ch008
+  part01/part02 boundary was rejoined correctly.
 - **High-confidence OCR/typo fixes:** `-previous`→`previous`,
   `A.O. TANSLEY.`→`A. O. Tansley.`, `arid`→`and`, `may he said`→`may be said`,
   `mint pictures`→`mind pictures`, `selfpreservation`→`self-preservation`,
   `selfdisgust`→`self-disgust`, `put out conclusions`→`put our conclusions`,
   `Emile Couc'`→`Emile Coué`.
+- **Two transcription errors corrected against the original 1922 text**
+  (Project Gutenberg #77457):
+  - `untrained in web physical subtleties` → `untrained in metaphysical subtleties`
+  - `the fatality functioning of the ductless glands` → `the faulty functioning …`
 - Appended `The End.` to the final chapter.
 
-## Left UNCHANGED for a human (uncertain — please check the source)
-- `…minds untrained in web physical subtleties` (Introduction): **"web"** looks
-  like a transcription error, but the intended word is unclear — not guessed.
-- `the fatality functioning of the ductless glands` (Ch. 14): **"fatality"** may
-  be "faulty", but uncertain — left as-is.
+## Left UNCHANGED for a human (low impact)
 - `elan vitale`, `biourge` (Ch. 7): foreign/technical terms, left verbatim.
 - Several `it's` for `its` — left as-is (identical when spoken).
 
