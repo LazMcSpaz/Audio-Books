@@ -1,0 +1,12 @@
+Chapter Two. The Evolution Of The Nervous System.
+<break time="1.5s" />
+
+The easiest way to grasp the organisation of our complex nervous structure is to study its evolution from its humble beginnings in the simplest forms of life.
+
+In single-celled animalcule, the most primitive type of living creature, a single cell performs all the functions of life; it moves, breathes, assimilates, excretes and feels. With the development of multi-cellular organisms, however, different cells are given different work to do, and made to do that and nothing else.
+
+It then becomes necessary that co-ordination should be maintained between the sense organs that perceive the prey and the muscles that move to its capture, and for this purpose other cells are used to specialise in communication.
+
+Thus it will be seen that the functional unit of the nervous system is not the nerve cell, but what is called the sensory-motor arc, consisting of a nerve carrying the incoming sensation from a sense organ and making contact with another nerve which carries the outgoing impulse to a muscle or organ.
+
+When a multiplicity of muscles becomes available for movement, it is necessary to further link up the sensory-motor arc. So that other parts of the structure may be brought into play and the response not be confined to one muscle alone, nerve cells form loops upon the arcs, and loops upon the loops, with further intercommunications among themselves. The organisation becomes more and more elaborate, admits more and more complex reactions to stimuli, till finally the wonderful complications of the human brain are achieved.
