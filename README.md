@@ -232,8 +232,17 @@ npx wrangler secret put GITHUB_TOKEN   # fine-grained PAT: this repo, Contents: 
 npx wrangler secret put APP_PASSWORD   # the password you'll type in the app to authorize pushes
 ```
 
-(In the dashboard you can instead set them under **Worker → Settings → Variables
-and Secrets** as *encrypted* values.)
+These create **encrypted secrets**, which survive every deploy (Cloudflare never
+deletes secrets on deploy). In the dashboard you can instead set them under
+**Worker → Settings → Variables and Secrets → Add**, but you must pick the
+**Secret (encrypt)** type — **not** plain **Text**.
+
+> ⚠️ **Why secrets vanished before:** a value added as a plaintext dashboard
+> *variable* is wiped on the next `wrangler deploy`, because Wrangler treats
+> `wrangler.jsonc` as the source of truth and overwrites dashboard vars. Two
+> defenses are in place: use **encrypted Secrets** (immune to this), and
+> `keep_vars: true` is set in `wrangler.jsonc` so even plaintext dashboard vars
+> are no longer deleted on deploy.
 
 ### Deploy by connecting Git (recommended)
 

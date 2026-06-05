@@ -6,15 +6,23 @@
   // Static assets are served first; the Worker script (src/index.js) only runs
   // for requests that don't match a file (i.e. the /api/* routes).
   //
-  // Secrets (NOT stored here — set once with `wrangler secret put`):
+  // Secrets (NOT stored here — set once as ENCRYPTED secrets, never plaintext):
   //   GITHUB_TOKEN   fine-grained PAT for this repo, Contents: Read and write
   //   APP_PASSWORD   the password you type in the app to authorize a push
+  //
+  // Set them with `wrangler secret put GITHUB_TOKEN` / `... APP_PASSWORD`, or in
+  // the dashboard via Add → type "Secret" (encrypt). Encrypted secrets survive
+  // every deploy. Plaintext dashboard *variables* do NOT — `wrangler deploy`
+  // overwrites dashboard vars with this file unless keep_vars is set (below).
   //
   // Docs: https://developers.cloudflare.com/workers/static-assets/
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "audiobook-prep",
   "main": "src/index.js",
   "compatibility_date": "2026-06-04",
+  // Don't delete dashboard-set variables on deploy. (Encrypted secrets are never
+  // deleted regardless; this protects any plaintext vars added in the dashboard.)
+  "keep_vars": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
