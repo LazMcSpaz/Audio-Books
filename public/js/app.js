@@ -13,7 +13,7 @@
 import { ingest, fileExtension } from "./ingest.js";
 import { pdfLooksScanned, ocrPdf } from "./ocr.js";
 import { verifyBackend, pushBook } from "./push.js";
-import { processBook, buildCombinedPronunciationTsv, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
+import { processBook, buildCombinedPronunciationPls, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
 
 const ACCEPTED = new Set([".txt", ".epub", ".pdf"]);
 
@@ -90,7 +90,7 @@ function setStatus(msg, kind = "info") {
 function bookFiles(result) {
   const files = result.files.map((f) => ({ name: f.name, text: f.text }));
   files.push({ name: "_REVIEW_FLAGS.txt", text: result.reviewFlagsText });
-  files.push({ name: "_PRONUNCIATION.tsv", text: result.pronunciationTsv });
+  files.push({ name: "_PRONUNCIATION.pls", text: result.pronunciationPls });
   return files;
 }
 
@@ -169,7 +169,7 @@ function detailsCell(b) {
           <ul>${items.map((it) => `<li><code>${escapeHtml(it.snippet)}</code></li>`).join("")}</ul></details>`)
       .join("");
   }
-  // Pronunciation preview: top terms by frequency (full list is in the .tsv).
+  // Pronunciation preview: top terms by frequency (full list is in the .pls).
   let pronHtml = `<p class="ok small">No pronunciation candidates found.</p>`;
   if (r.pronunciation.length) {
     const top = r.pronunciation.slice(0, 25);
@@ -177,9 +177,9 @@ function detailsCell(b) {
       .map((c) => `<li><code>${escapeHtml(c.term)}</code> <span class="muted">×${num(c.count)}</span></li>`)
       .join("");
     const more = r.pronunciation.length > top.length
-      ? `<li class="muted">…and ${num(r.pronunciation.length - top.length)} more in <code>_PRONUNCIATION.tsv</code></li>`
+      ? `<li class="muted">…and ${num(r.pronunciation.length - top.length)} more in <code>_PRONUNCIATION.pls</code></li>`
       : "";
-    pronHtml = `<p class="small muted">Fill in aliases in <code>_PRONUNCIATION.tsv</code> (plain respellings, not IPA).</p>
+    pronHtml = `<p class="small muted">Fill the <code>&lt;alias&gt;</code> tags in <code>_PRONUNCIATION.pls</code> (plain respellings, not IPA) and upload to ElevenLabs.</p>
       <ul class="file-list">${rows}${more}</ul>`;
   }
   return `
@@ -330,7 +330,7 @@ async function processOne(b) {
     const r = b.result;
     console.info(
       `[${b.name}] ${r.chunkCount} chunks, ${r.totalChars} chars · ` +
-        `${r.pronunciationCount} pronunciation candidates (_PRONUNCIATION.tsv) · ` +
+        `${r.pronunciationCount} pronunciation candidates (_PRONUNCIATION.pls) · ` +
         `${r.breakCount} structural breaks · ${r.flags.length} review flags`
     );
 
@@ -400,13 +400,13 @@ async function downloadAllZip() {
   downloadBlob(await zip.generateAsync({ type: "blob" }), "audiobook_chunks.zip");
 }
 
-// One combined TSV across all done books, for cross-book alias triage.
+// One combined PLS dictionary across all done books, for cross-book alias triage.
 function downloadAllPronunciation() {
   const done = books.filter((b) => b.status === "done" && b.result.pronunciation.length);
   if (!done.length) return;
   const data = done.map((b) => ({ slug: b.slug, pronunciation: b.result.pronunciation }));
-  const tsv = buildCombinedPronunciationTsv(data);
-  downloadBlob(new Blob([tsv], { type: "text/tab-separated-values" }), "pronunciation_combined.tsv");
+  const pls = buildCombinedPronunciationPls(data);
+  downloadBlob(new Blob([pls], { type: "application/pls+xml" }), "pronunciation_combined.pls");
 }
 
 function clearAll() {

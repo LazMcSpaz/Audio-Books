@@ -275,31 +275,65 @@ export function extractPronunciation(text) {
   return out;
 }
 
-export function buildPronunciationTsv(candidates) {
-  const header = [
-    "# _PRONUNCIATION.tsv — terms a text-to-speech voice may mispronounce.",
-    "# Fill the 'alias' column with a plain phonetic RESPELLING, e.g.",
-    "#   Qabalah  ->  Kah-BAH-lah",
-    "# In ElevenLabs these become ALIAS rules, which work on ALL models.",
-    "# Do NOT put IPA / phonemes here: phoneme rules only apply to",
-    "# eleven_flash_v2 and are silently IGNORED on V3 and other models.",
-    "# Sorted by frequency (most-spoken first) so you can triage the",
-    "# high-impact names first. Case-sensitive: 'Word' and 'word' are separate.",
-    "# Tab-separated; leave 'alias'/'notes' blank to fill in.",
-    "#",
-    "term\tcount\talias\tnotes",
-  ].join("\n");
-  const rows = candidates.map((c) => `${c.term}\t${c.count}\t\t`).join("\n");
-  return `${header}\n${rows}\n`;
+// --- ElevenLabs pronunciation dictionaries (PLS / .pls XML) -----------------
+// ElevenLabs accepts W3C PLS lexicon files (uploaded as .pls / .txt / .xml).
+// Each rule is a <lexeme> with a <grapheme> (the word) and an <alias> (a plain
+// respelling). We emit the graphemes with EMPTY <alias> tags for the human to
+// fill, sorted by frequency. Alias rules work on all models; <phoneme>/IPA only
+// works on eleven_flash_v2 / eleven_monolingual_v1, so we never emit those.
+
+// Escape XML text content. (Graphemes are letters + apostrophes, but escape
+// defensively.) Apostrophes/quotes are legal in element text, so leave them.
+function xmlEscapeText(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+// XML comments may not contain "--" or end in "-".
+function xmlCommentSafe(s) {
+  return String(s).replace(/--+/g, "-").replace(/-+$/, "");
+}
+
+const PLS_HEADER = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  "<!--",
+  "  ElevenLabs pronunciation dictionary (PLS). Upload it as .pls / .txt / .xml.",
+  "  Fill each <alias> with a PLAIN PHONETIC RESPELLING, e.g.",
+  "    <grapheme>Qabalah</grapheme><alias>Kah-BAH-lah</alias>",
+  "  Alias rules work on ALL ElevenLabs models. Do NOT use IPA/phonemes here:",
+  "  phoneme rules only apply to eleven_flash_v2 / eleven_monolingual_v1 and are",
+  "  silently ignored elsewhere. PLS is case-sensitive: 'Word' != 'word'.",
+  "  Entries are sorted by frequency (most-spoken first); the comment before each",
+  "  shows the count. IMPORTANT: fill the <alias> for the words you care about and",
+  "  DELETE every <lexeme> you leave blank — ElevenLabs rejects empty aliases.",
+  "-->",
+  '<lexicon version="1.0"',
+  '         xmlns="http://www.w3.org/2005/01/pronunciation-lexicon"',
+  '         alphabet="ipa" xml:lang="en-US">',
+].join("\n");
+
+function plsLexeme(term, commentText) {
+  return (
+    `  <!-- ${commentText} -->\n` +
+    `  <lexeme>\n` +
+    `    <grapheme>${xmlEscapeText(term)}</grapheme>\n` +
+    `    <alias></alias>\n` +
+    `  </lexeme>`
+  );
+}
+
+export function buildPronunciationPls(candidates) {
+  const body = candidates
+    .map((c) => plsLexeme(c.term, `count: ${c.count}`))
+    .join("\n");
+  return `${PLS_HEADER}\n${body}\n</lexicon>\n`;
 }
 
 /*
- * Merge several books' pronunciation candidates into one TSV for cross-book
+ * Merge several books' pronunciation candidates into one PLS for cross-book
  * alias triage. `books` is [{ slug, pronunciation: [{term, count}] }]. Counts
- * are summed across books (case-sensitive), with a 'books' column showing the
- * per-book breakdown. Sorted by total frequency desc.
+ * are summed across books (case-sensitive); the per-lexeme comment shows the
+ * total and the per-book breakdown. Sorted by total frequency desc.
  */
-export function buildCombinedPronunciationTsv(books) {
+export function buildCombinedPronunciationPls(books) {
   const map = new Map(); // term -> { total, perBook: Map(slug -> count) }
   for (const b of books) {
     for (const { term, count } of b.pronunciation || []) {
@@ -310,26 +344,16 @@ export function buildCombinedPronunciationTsv(books) {
     }
   }
   const sorted = [...map.entries()].sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]));
-  const header = [
-    "# _PRONUNCIATION (combined) — candidate mispronunciations across all books in this batch.",
-    "# Fill the 'alias' column with a plain phonetic RESPELLING, e.g.",
-    "#   Qabalah  ->  Kah-BAH-lah",
-    "# In ElevenLabs these become ALIAS rules (ALL models), NOT phoneme/IPA rules",
-    "# (those only work on eleven_flash_v2 and are silently ignored elsewhere).",
-    "# 'count' is summed across books; 'books' lists each book's occurrences.",
-    "# Sorted by total frequency. Case-sensitive: 'Word' and 'word' are separate.",
-    "# Tab-separated; leave 'alias'/'notes' blank to fill in.",
-    "#",
-    "term\tcount\talias\tnotes\tbooks",
-  ].join("\n");
-  const rows = sorted.map(([term, rec]) => {
-    const where = [...rec.perBook.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([slug, c]) => `${slug}(${c})`)
-      .join("; ");
-    return `${term}\t${rec.total}\t\t\t${where}`;
-  }).join("\n");
-  return `${header}\n${rows}\n`;
+  const body = sorted
+    .map(([term, rec]) => {
+      const where = [...rec.perBook.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([slug, c]) => `${slug}(${c})`)
+        .join("; ");
+      return plsLexeme(term, xmlCommentSafe(`count: ${rec.total} | ${where}`));
+    })
+    .join("\n");
+  return `${PLS_HEADER}\n${body}\n</lexicon>\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +513,7 @@ function pad(n, width) {
 /*
  * Run the full pipeline on raw ingested text. Returns:
  *   { files: [{name, title, text, chars}], flags, chapters, totalChars,
- *     reviewFlagsText, pronunciation, pronunciationTsv, pronunciationCount,
+ *     reviewFlagsText, pronunciation, pronunciationPls, pronunciationCount,
  *     breakCount, chapterCount, chunkCount }
  *
  * options.insertBreaks (default true) toggles structural <break> insertion.
@@ -504,7 +528,7 @@ export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS, options = {})
   const flags = collectFlags(cleaned);
   // Pronunciation scan runs on the cleaned text, before any break tags are added.
   const pronunciation = extractPronunciation(cleaned);
-  const pronunciationTsv = buildPronunciationTsv(pronunciation);
+  const pronunciationPls = buildPronunciationPls(pronunciation);
   const chapters = splitIntoChapters(cleaned);
 
   const files = [];
@@ -530,7 +554,7 @@ export function processBook(rawText, maxChars = DEFAULT_MAX_CHARS, options = {})
     totalChars,
     reviewFlagsText,
     pronunciation,
-    pronunciationTsv,
+    pronunciationPls,
     pronunciationCount: pronunciation.length,
     breakCount,
     chapterCount: chapters.length,

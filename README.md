@@ -97,7 +97,7 @@ each folder's own `README.md`.
 3. **Detect chapters** via headings like `CHAPTER I`, `CHAPTER 1`,
    `Chapter One`, bare roman numerals, or bare numbered headings on their own
    line (optional trailing period).
-4. **Extract pronunciation candidates** → `_PRONUNCIATION.tsv` (see below).
+4. **Extract pronunciation candidates** → `_PRONUNCIATION.pls` (see below).
 5. **Insert structural `<break>` tags** at chapter/scene boundaries (see below).
 6. **Chunk** each chapter into blocks under **4,500 characters** (ElevenLabs'
    hard per-paragraph limit is 5,000; the headroom is for the pause tags Stage 2
@@ -106,7 +106,7 @@ each folder's own `README.md`.
    structural break tags ride along inside the chunk text and count toward the
    4,500-char budget.
 
-### Pronunciation extraction (`_PRONUNCIATION.tsv`)
+### Pronunciation extraction (`_PRONUNCIATION.pls`)
 
 A pass over the cleaned text collects every term a TTS voice is likely to
 mispronounce, so a human can supply corrected pronunciations before narration.
@@ -124,17 +124,23 @@ A term is a candidate if it is any of:
   **skipped in the browser** — there's no system wordlist, and per the spec we
   skip rather than bundle a heavy dictionary.)*
 
-Output is a TAB-separated file: `term`, `count` (frequency in the book), a blank
-`alias` column for the human to fill with a **plain phonetic respelling**
-(e.g. `Qabalah → Kah-BAH-lah`), and a blank `notes` column. **Sorted by
-frequency descending** so the high-impact names (a name said 200 times) are
-triaged first. Deduplicated but **case-sensitive** — `Word` and `word` are
-separate rows, because ElevenLabs alias rules are case-sensitive.
+Output is a **PLS lexicon file** (`.pls`) — the W3C pronunciation-dictionary
+format ElevenLabs ingests directly (it accepts `.pls` / `.txt` / `.xml`). Each
+candidate is emitted as a `<lexeme>` with the word in `<grapheme>` and an
+**empty `<alias>`** for you to fill with a **plain phonetic respelling**
+(e.g. `<grapheme>Qabalah</grapheme><alias>Kah-BAH-lah</alias>`). A comment before
+each entry shows its frequency, and entries are **sorted by frequency
+descending** so the high-impact names (a name said 200 times) come first.
+Deduplicated but **case-sensitive** — `Word` and `word` are separate lexemes,
+matching PLS/ElevenLabs case sensitivity.
 
-The file header reminds you these become **alias rules** in ElevenLabs (which
-work on **all** models), **not phoneme rules** (which only work on
-`eleven_flash_v2` and are silently ignored on V3 and others) — so fill in plain
-respellings, **not IPA**.
+To use it: fill the `<alias>` tags for the words you care about, **delete every
+`<lexeme>` you leave blank** (ElevenLabs rejects empty aliases), and upload the
+file as a pronunciation dictionary. We emit **`<alias>` rules** (which work on
+**all** models), never `<phoneme>`/IPA (those only work on `eleven_flash_v2` /
+`eleven_monolingual_v1` and are silently ignored elsewhere) — so use plain
+respellings, **not IPA**. The combined download (`pronunciation_combined.pls`)
+merges all books in a batch into one dictionary, counts summed per term.
 
 ### Structural pause insertion (`<break>` tags)
 
@@ -173,8 +179,9 @@ Per book, under `chunks/<book>/`:
 
 - `ch001_part01.txt`, `ch002_part01.txt`, … — one file per chunk (with any
   structural `<break>` tags inline).
-- `_PRONUNCIATION.tsv` — candidate mispronunciations, frequency-sorted, with
-  blank `alias`/`notes` columns for you to fill in (alias rules, not IPA).
+- `_PRONUNCIATION.pls` — candidate mispronunciations as an ElevenLabs PLS
+  dictionary, frequency-sorted, with empty `<alias>` tags to fill in (alias
+  rules, not IPA) and upload directly.
 - `_REVIEW_FLAGS.txt` — every flagged item with a context snippet.
 
 The app pushes these to the `book-chunks` branch (when connected), and

@@ -61,11 +61,13 @@
         <p><strong>What each book produces</strong> (in its <code>chunks/&lt;book&gt;/</code> folder):</p>
         <ul class="howto__files">
           <li><code>ch001_part01.txt …</code> — the chunked text to narrate, in order.</li>
-          <li><code>_PRONUNCIATION.tsv</code> — names/terms a voice may mispronounce, most-frequent
-              first. Open it, fill the <em>alias</em> column with a plain phonetic respelling
-              (e.g. <code>Qabalah → Kah-BAH-lah</code>), and load those as <strong>alias</strong>
-              rules in ElevenLabs. <span class="muted">Plain respellings, <em>not</em> IPA — IPA/phoneme
-              rules only work on the V2-flash model and are ignored elsewhere.</span></li>
+          <li><code>_PRONUNCIATION.pls</code> — names/terms a voice may mispronounce, most-frequent
+              first, as an ElevenLabs <strong>PLS dictionary</strong>. Fill each <code>&lt;alias&gt;</code>
+              with a plain phonetic respelling (e.g. <code>Qabalah → Kah-BAH-lah</code>), delete the
+              ones you leave blank, then upload it to ElevenLabs as a pronunciation dictionary (it
+              accepts <code>.pls</code> / <code>.txt</code> / <code>.xml</code>).
+              <span class="muted">Plain respellings, <em>not</em> IPA — alias rules work on all models;
+              IPA/phoneme rules only work on the V2-flash model and are ignored elsewhere.</span></li>
           <li><code>_REVIEW_FLAGS.txt</code> — ambiguous bits the script wouldn't guess on
               (St. = Saint/Street?, times, ordinals…), for the Stage 2 review.</li>
         </ul>
@@ -116,7 +118,7 @@
       <div class="actions">
         <button id="startBtn" class="btn btn--primary" disabled>Start processing</button>
         <button id="zipAllBtn" class="btn" hidden>Download all as ZIP</button>
-        <button id="pronAllBtn" class="btn" hidden>Download pronunciation (combined .tsv)</button>
+        <button id="pronAllBtn" class="btn" hidden>Download pronunciation (combined .pls)</button>
         <button id="clearBtn" class="btn" disabled>Clear list</button>
       </div>
     </section>
