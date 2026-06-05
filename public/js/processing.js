@@ -256,6 +256,45 @@ export function buildPronunciationTsv(candidates) {
   return `${header}\n${rows}\n`;
 }
 
+/*
+ * Merge several books' pronunciation candidates into one TSV for cross-book
+ * alias triage. `books` is [{ slug, pronunciation: [{term, count}] }]. Counts
+ * are summed across books (case-sensitive), with a 'books' column showing the
+ * per-book breakdown. Sorted by total frequency desc.
+ */
+export function buildCombinedPronunciationTsv(books) {
+  const map = new Map(); // term -> { total, perBook: Map(slug -> count) }
+  for (const b of books) {
+    for (const { term, count } of b.pronunciation || []) {
+      let rec = map.get(term);
+      if (!rec) { rec = { total: 0, perBook: new Map() }; map.set(term, rec); }
+      rec.total += count;
+      rec.perBook.set(b.slug, (rec.perBook.get(b.slug) || 0) + count);
+    }
+  }
+  const sorted = [...map.entries()].sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]));
+  const header = [
+    "# _PRONUNCIATION (combined) — candidate mispronunciations across all books in this batch.",
+    "# Fill the 'alias' column with a plain phonetic RESPELLING, e.g.",
+    "#   Qabalah  ->  Kah-BAH-lah",
+    "# In ElevenLabs these become ALIAS rules (ALL models), NOT phoneme/IPA rules",
+    "# (those only work on eleven_flash_v2 and are silently ignored elsewhere).",
+    "# 'count' is summed across books; 'books' lists each book's occurrences.",
+    "# Sorted by total frequency. Case-sensitive: 'Word' and 'word' are separate.",
+    "# Tab-separated; leave 'alias'/'notes' blank to fill in.",
+    "#",
+    "term\tcount\talias\tnotes\tbooks",
+  ].join("\n");
+  const rows = sorted.map(([term, rec]) => {
+    const where = [...rec.perBook.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([slug, c]) => `${slug}(${c})`)
+      .join("; ");
+    return `${term}\t${rec.total}\t\t\t${where}`;
+  }).join("\n");
+  return `${header}\n${rows}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // CHAPTER DETECTION + CHUNKING
 // ---------------------------------------------------------------------------

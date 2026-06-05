@@ -13,7 +13,7 @@
 import { ingest, fileExtension } from "./ingest.js";
 import { pdfLooksScanned, ocrPdf } from "./ocr.js";
 import { verifyBackend, pushBook } from "./push.js";
-import { processBook, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
+import { processBook, buildCombinedPronunciationTsv, estimateMonths, estimateAudioHours, DEFAULT_MAX_CHARS } from "./processing.js";
 
 const ACCEPTED = new Set([".txt", ".epub", ".pdf"]);
 
@@ -234,9 +234,11 @@ function updateRow(b) {
 function updateControls() {
   const hasQueued = books.some((b) => b.status === "queued");
   const hasDone = books.some((b) => b.status === "done");
+  const hasPron = books.some((b) => b.status === "done" && b.result.pronunciation.length);
   $("#startBtn").disabled = processing || !hasQueued;
   $("#startBtn").textContent = processing ? "Processing…" : "Start processing";
   $("#zipAllBtn").hidden = !hasDone;
+  $("#pronAllBtn").hidden = !hasPron;
   $("#clearBtn").disabled = processing || books.length === 0;
 }
 
@@ -398,6 +400,15 @@ async function downloadAllZip() {
   downloadBlob(await zip.generateAsync({ type: "blob" }), "audiobook_chunks.zip");
 }
 
+// One combined TSV across all done books, for cross-book alias triage.
+function downloadAllPronunciation() {
+  const done = books.filter((b) => b.status === "done" && b.result.pronunciation.length);
+  if (!done.length) return;
+  const data = done.map((b) => ({ slug: b.slug, pronunciation: b.result.pronunciation }));
+  const tsv = buildCombinedPronunciationTsv(data);
+  downloadBlob(new Blob([tsv], { type: "text/tab-separated-values" }), "pronunciation_combined.tsv");
+}
+
 function clearAll() {
   if (processing) return;
   books = [];
@@ -436,6 +447,7 @@ function wire() {
   $("#appPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") connectBackend(); });
   $("#startBtn").addEventListener("click", startProcessing);
   $("#zipAllBtn").addEventListener("click", downloadAllZip);
+  $("#pronAllBtn").addEventListener("click", downloadAllPronunciation);
   $("#clearBtn").addEventListener("click", clearAll);
 
   updateControls();
